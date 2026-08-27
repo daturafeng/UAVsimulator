@@ -31,6 +31,21 @@ namespace
 		}
 		return FString();
 	}
+
+	/**
+	 * 从 services topic（thing/product/{sn}/services）提取设备 SN。
+	 * 提取失败返回空串，由调用方回退默认 SN。
+	 */
+	FString ParseSnFromServicesTopic(const FString& InTopic)
+	{
+		const FString Prefix = TEXT("thing/product/");
+		const FString Suffix = TEXT("/services");
+		if (InTopic.StartsWith(Prefix) && InTopic.EndsWith(Suffix))
+		{
+			return InTopic.Mid(Prefix.Len(), InTopic.Len() - Prefix.Len() - Suffix.Len());
+		}
+		return FString();
+	}
 }
 
 UUAVMqttBridgeComponent::UUAVMqttBridgeComponent()
@@ -223,10 +238,12 @@ void UUAVMqttBridgeComponent::OnServicesMessage(const FMQTTClientMessage& InMess
 	{
 		return;
 	}
-	DispatchServicesMessage(PayloadJson);
+	// 提取报文来源设备 SN（topic 形如 thing/product/{sn}/services）
+	const FString SourceSn = ParseSnFromServicesTopic(InMessage.Topic);
+	DispatchServicesMessage(PayloadJson, SourceSn);
 }
 
-void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJson)
+void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJson, const FString& InSn)
 {
 	TSharedPtr<FJsonObject> Root;
 	if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InPayloadJson), Root) || !Root.IsValid())
@@ -272,19 +289,20 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] 未知或未支持的指令: %s"), *Method);
 	}
 
-	// 回发 services_reply
-	PublishServicesReply(Method, Tid, Bid, Result);
+	// 回发 services_reply（按来源设备 SN，缺省回退机场 SN）
+	PublishServicesReply(Method, Tid, Bid, Result, InSn);
 	OnServiceCommandReceived.Broadcast(Method);
 }
 
-void UUAVMqttBridgeComponent::PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult)
+void UUAVMqttBridgeComponent::PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn)
 {
 	if (!MqttClient || !bConnected)
 	{
 		return;
 	}
 	const TSharedRef<FJsonObject> Reply = MakeServicesReply(InMethod, InTid, InBid, InResult);
-	const FString Topic = MakeTopic(kTopicServicesReplyTemplate, DockSn);
+	const FString TargetSn = InSn.IsEmpty() ? DockSn : InSn;
+	const FString Topic = MakeTopic(kTopicServicesReplyTemplate, TargetSn);
 	const FString Json = SerializeJson(Reply);
 	if (!Json.IsEmpty())
 	{

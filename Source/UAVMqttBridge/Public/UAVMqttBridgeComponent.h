@@ -127,12 +127,12 @@ protected:
 	void OnServicesMessage(const FMQTTClientMessage& InMessage);
 
 	// ---- 指令分发 ----
-	/** 解析 services 报文并按 method 分发到飞控/相机，回发 services_reply */
-	void DispatchServicesMessage(const FString& InPayloadJson);
+	/** 解析 services 报文并按 method 分发到飞控/相机，回发 services_reply（InSn 为报文来源设备 SN，空则回退机场 SN） */
+	void DispatchServicesMessage(const FString& InPayloadJson, const FString& InSn = FString());
 
 	// ---- 发布 ----
-	/** 发布 services_reply（thing/product/{DockSn}/services_reply） */
-	void PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult);
+	/** 发布 services_reply（thing/product/{sn}/services_reply，InSn 空则用机场 SN） */
+	void PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn = FString());
 
 	/** 发布事件（thing/product/{DockSn}/events，含 gateway） */
 	void PublishEvent(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InTid = FString(), const FString& InBid = FString());

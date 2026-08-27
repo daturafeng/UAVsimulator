@@ -4,7 +4,7 @@
 
 ## What Changes
 
-- 启用 UE 5.7 引擎自带 MQTT 插件（Engine/Plugins/Protocols/MQTT 的 MQTTCore），在 .uproject 登记启用，UAVMqttBridge 增加 MQTTCore 模块依赖。
+- 将 UE 5.7 引擎 MQTT 插件源码（Engine/Plugins/Protocols/MQTT 的 MQTTCore）内置为项目插件 UAVMQTT（模块 UAVMQTTCore），在 .uproject 登记启用，UAVMqttBridge 增加 UAVMQTTCore 模块依赖。
 - UAVMqttBridge 组件重写为完整桥接：
   - 连接管理：通过 UMQTTSubsystem 创建客户端，连接/断开、连接状态回调，配置默认值对齐 dock（broker 10.100.51.15:1883、root/unis@123，可编辑覆盖）。
   - 指令下发订阅：订阅 thing/product/{机场SN}/services，解析 services 报文（tid/bid/method/data），按 method 分发到 UAVFlightControl / UAVCameraStream，并回发 thing/product/{机场SN}/services_reply（result 0/非0）。
@@ -24,7 +24,7 @@
 
 ## Impact
 
-- `UAVsimulator.uproject`：新增 MQTT 插件启用。
+- `UAVsimulator.uproject`：启用项目内置 MQTT 插件 UAVMQTT（停用引擎自带 MQTT 插件）。
 - `Source/UAVMqttBridge`：替换占位实现为完整 MQTT 桥接组件。
-- 依赖关系：UAVMqttBridge 新增 MQTTCore 依赖；保持 UAVMqttBridge → UAVFlightControl/UAVDroneSim/UAVCameraStream/UAVCore。
-- 不引入第三方依赖（MQTTCore 为引擎自带插件）。
+- 依赖关系：UAVMqttBridge 新增 UAVMQTTCore 依赖；保持 UAVMqttBridge → UAVFlightControl/UAVDroneSim/UAVCameraStream/UAVCore。
+- 不引入第三方依赖（UAVMQTT 为引擎 MQTT 插件源码的项目内置副本）。

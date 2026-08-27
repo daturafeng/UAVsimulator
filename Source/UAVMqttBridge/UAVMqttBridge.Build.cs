@@ -7,7 +7,7 @@ public class UAVMqttBridge : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "UAVCore", "UAVDroneSim", "UAVFlightControl", "UAVCameraStream", "MQTTCore" });
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "UAVCore", "UAVDroneSim", "UAVFlightControl", "UAVCameraStream", "UAVMQTTCore" });
 		PrivateDependencyModuleNames.AddRange(new string[] { "Json" });
 	}
 }

@@ -7,7 +7,7 @@
 ## ADDED Requirements
 
 ### Requirement: 连接管理
-UAVMqttBridge MUST 提供可配置的 MQTT 连接（broker 地址、端口、用户名、密码、机场 SN、无人机 SN），通过引擎自带 MQTTCore 插件建立/断开连接，并暴露连接状态事件（已连接/断开/失败）。
+UAVMqttBridge MUST 提供可配置的 MQTT 连接（broker 地址、端口、用户名、密码、机场 SN、无人机 SN），通过项目内置 MQTT 插件（UAVMQTT，模块 UAVMQTTCore，源自引擎 MQTTCore 源码）建立/断开连接，并暴露连接状态事件（已连接/断开/失败）。
 
 #### Scenario: 默认配置对齐 dock
 - **WHEN** 组件未覆盖任何配置
