@@ -12,6 +12,8 @@ namespace UAV::CloudApi
 	const TCHAR* kTopicEventsTemplate = TEXT("thing/product/{sn}/events");
 	const TCHAR* kTopicOsdTemplate = TEXT("thing/product/{sn}/osd");
 	const TCHAR* kTopicStateTemplate = TEXT("thing/product/{sn}/state");
+	const TCHAR* kTopicDrcDownTemplate = TEXT("thing/product/{sn}/drc/down");
+	const TCHAR* kTopicDrcUpTemplate = TEXT("thing/product/{sn}/drc/up");
 
 	// ---- 服务指令 method ----
 	const TCHAR* kMethodFlightAuthorityGrab = TEXT("flight_authority_grab");
@@ -55,6 +57,11 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodPoiModeEnter = TEXT("poi_mode_enter");
 	const TCHAR* kMethodPoiModeExit = TEXT("poi_mode_exit");
 	const TCHAR* kMethodPoiCircleSpeedSet = TEXT("poi_circle_speed_set");
+	const TCHAR* kMethodDrcModeEnter = TEXT("drc_mode_enter");
+	const TCHAR* kMethodDrcModeExit = TEXT("drc_mode_exit");
+	const TCHAR* kMethodDroneControl = TEXT("drone_control");
+	const TCHAR* kMethodHeartBeat = TEXT("heart_beat");
+	const TCHAR* kMethodDroneEmergencyStop = TEXT("drone_emergency_stop");
 
 	// ---- 默认设备标识（与 dock script/common.py 假设备口径一致）----
 	const TCHAR* kDefaultDockSn = TEXT("DOCK3TEST001");
@@ -69,6 +76,7 @@ namespace UAV::CloudApi
 	const TCHAR* kEventFlighttaskReady = TEXT("flighttask_ready");
 	const TCHAR* kEventHms = TEXT("hms");
 	const TCHAR* kEventFlyToPointProgress = TEXT("fly_to_point_progress");
+	const TCHAR* kEventDrcStatusNotify = TEXT("drc_status_notify");
 
 	FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality)
 	{

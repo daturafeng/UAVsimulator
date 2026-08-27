@@ -1,5 +1,6 @@
 #include "UAVDroneSimComponent.h"
 #include "GameFramework/Actor.h"
+#include "HAL/PlatformTime.h"
 
 namespace
 {
@@ -160,6 +161,75 @@ void UUAVDroneSimComponent::MoveToLocation(const FVector& NewLocation)
 	bMissionPaused = false;
 	CurrentWaypointIndex = 0;
 	bMissionActive = true;
+}
+
+void UUAVDroneSimComponent::UpdateJoystickControl(double DeltaTime)
+{
+	const double Now = FPlatformTime::Seconds();
+	const double ElapsedMs = (Now - LastJoystickCommandTime) * 1000.0;
+	FVector TargetVelocity = FVector::ZeroVector;
+	if (ElapsedMs <= JoystickDelayTimeMs)
+	{
+		// 指令有效期内：机体坐标按航向旋转为场景速度（前=+x、右=+y、上=+h）
+		const double HeadingRad = FMath::DegreesToRadians(HeadingDegrees);
+		const FVector Forward(FMath::Sin(HeadingRad), FMath::Cos(HeadingRad), 0.0);
+		const FVector Right(FMath::Cos(HeadingRad), -FMath::Sin(HeadingRad), 0.0);
+		TargetVelocity = Forward * (JoystickX * MaxHorizontalSpeed / 17.0)
+			+ Right * (JoystickY * MaxHorizontalSpeed / 17.0)
+			+ FVector(0.0, 0.0, JoystickH * MaxVerticalSpeed / 5.0);
+	}
+	// 速度平滑：响应系数随指令频率提升
+	const double Smooth = FMath::Clamp(DeltaTime * JoystickFreq, 0.0, 1.0);
+	JoystickVelocity += (TargetVelocity - JoystickVelocity) * Smooth;
+	// 偏航角速度持续生效（度/秒），归一化到 0-360
+	HeadingDegrees = FMath::Fmod(HeadingDegrees + JoystickW * DeltaTime, 360.0);
+	if (HeadingDegrees < 0.0)
+	{
+		HeadingDegrees += 360.0;
+	}
+	// 位置积分与遥测累计（与航点任务口径一致）
+	CurrentLocation += JoystickVelocity * DeltaTime;
+	CurrentHorizontalSpeed = FMath::Sqrt(JoystickVelocity.X * JoystickVelocity.X + JoystickVelocity.Y * JoystickVelocity.Y);
+	CurrentVerticalSpeed = JoystickVelocity.Z;
+	TotalFlightTimeSeconds += DeltaTime;
+	TotalFlightDistanceMeters += CurrentHorizontalSpeed * DeltaTime;
+	if (IsRecording())
+	{
+		RecordingTimeSeconds += DeltaTime;
+	}
+	if (AActor* Owner = GetOwner())
+	{
+		Owner->SetActorLocation(CurrentLocation);
+	}
+}
+
+void UUAVDroneSimComponent::SetJoystickCommand(int32 InX, int32 InY, int32 InH, int32 InW, int32 InFreq, int32 InDelayTimeMs)
+{
+	// 首次进入摇杆控制时停止现有航点任务（DRC 直控与任务互斥）
+	if (!bJoystickActive)
+	{
+		StopMission();
+	}
+	bJoystickActive = true;
+	JoystickX = InX;
+	JoystickY = InY;
+	JoystickH = InH;
+	JoystickW = InW;
+	JoystickFreq = FMath::Max(2, InFreq);
+	JoystickDelayTimeMs = FMath::Max(100, InDelayTimeMs);
+	LastJoystickCommandTime = FPlatformTime::Seconds();
+}
+
+void UUAVDroneSimComponent::SetJoystickActive(bool bInActive)
+{
+	if (bJoystickActive && !bInActive)
+	{
+		// 停用摇杆控制：清空摇杆速度，恢复航点任务物理分支
+		JoystickVelocity = FVector::ZeroVector;
+		CurrentHorizontalSpeed = 0.0;
+		CurrentVerticalSpeed = 0.0;
+	}
+	bJoystickActive = bInActive;
 }
 
 void UUAVDroneSimComponent::UpdateHeading(const FVector& InHorizontalDir)
@@ -414,6 +484,13 @@ void UUAVDroneSimComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 		{
 			RecordingTimeSeconds += DeltaTime;
 		}
+	}
+
+	// 摇杆直控模式：优先于航点任务推进（DRC 指令过期后目标归零悬停）
+	if (bJoystickActive)
+	{
+		UpdateJoystickControl(DeltaTime);
+		return;
 	}
 
 	// 无进行中任务或已暂停：位置保持，速度归零

@@ -484,6 +484,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Mission")
 	void MoveToLocation(const FVector& NewLocation);
 
+	// ---- DRC 摇杆控制 ----
+	/** 设置摇杆指令（DRC 虚拟摇杆）：x 前向/后向（-17~17）、y 左向/右向（-17~17）、h 垂直（-4~5）、w 偏航角速度（-90~90 度/秒）、freq 指令频率（2~10）、delayTime 指令有效期（100~1000 毫秒） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Mission")
+	void SetJoystickCommand(int32 InX, int32 InY, int32 InH, int32 InW, int32 InFreq, int32 InDelayTimeMs);
+
+	/** 激活/停用摇杆控制模式（drone_control 成功时激活；急停/退出 DRC 时停用） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Mission")
+	void SetJoystickActive(bool bInActive);
+
+	/** 是否处于摇杆控制模式 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Mission")
+	bool IsJoystickActive() const { return bJoystickActive; }
+
+	/** 推进摇杆控制状态（速度平滑、偏航、位置积分、过期悬停）；由 TickComponent 驱动，测试可直接调用 */
+	void UpdateJoystickControl(double DeltaTime);
+
 	/** 每帧推进逻辑（由拥有者驱动） */
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
@@ -703,4 +719,41 @@ private:
 	/** 低电量事件已触发标志（回升后复位） */
 	UPROPERTY()
 	bool bBatteryLowEventFired = false;
+
+	// ---- DRC 摇杆控制状态 ----
+	/** 摇杆控制模式激活（DRC 直控，优先于航点任务） */
+	UPROPERTY()
+	bool bJoystickActive = false;
+
+	/** 摇杆指令：前向/后向（-17~17） */
+	UPROPERTY()
+	int32 JoystickX = 0;
+
+	/** 摇杆指令：左向/右向（-17~17） */
+	UPROPERTY()
+	int32 JoystickY = 0;
+
+	/** 摇杆指令：垂直（-4~5） */
+	UPROPERTY()
+	int32 JoystickH = 0;
+
+	/** 摇杆指令：偏航角速度（-90~90 度/秒） */
+	UPROPERTY()
+	int32 JoystickW = 0;
+
+	/** 摇杆指令频率（2~10 Hz，速度平滑系数） */
+	UPROPERTY()
+	int32 JoystickFreq = 5;
+
+	/** 摇杆指令有效期（100~1000 毫秒，超时自动悬停） */
+	UPROPERTY()
+	int32 JoystickDelayTimeMs = 500;
+
+	/** 最近摇杆指令时刻（秒，平台单调时钟） */
+	UPROPERTY()
+	double LastJoystickCommandTime = 0.0;
+
+	/** 摇杆当前速度（场景坐标，米/秒，平滑过渡） */
+	UPROPERTY()
+	FVector JoystickVelocity = FVector::ZeroVector;
 };

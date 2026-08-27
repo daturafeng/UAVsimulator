@@ -51,6 +51,21 @@ namespace
 	}
 
 	/**
+	 * 从 drc/down topic（thing/product/{sn}/drc/down）提取设备 SN。
+	 * 提取失败返回空串，由调用方回退默认 SN。
+	 */
+	FString ParseSnFromDrcTopic(const FString& InTopic)
+	{
+		const FString Prefix = TEXT("thing/product/");
+		const FString Suffix = TEXT("/drc/down");
+		if (InTopic.StartsWith(Prefix) && InTopic.EndsWith(Suffix))
+		{
+			return InTopic.Mid(Prefix.Len(), InTopic.Len() - Prefix.Len() - Suffix.Len());
+		}
+		return FString();
+	}
+
+	/**
 	 * flighttask_progress 状态 → WaylineMissionStateEnum（对齐 dock 枚举：5=到达首航点、6=执行中、9=结束）。
 	 * 终态（ok/failed/canceled/timeout/partially_done 等）统一映射为 9。
 	 */
@@ -121,6 +136,7 @@ void UUAVMqttBridgeComponent::BeginPlay()
 		FlightControl->OnReturnHomeStatus.AddDynamic(this, &UUAVMqttBridgeComponent::OnReturnHomeStatus);
 		FlightControl->OnFlighttaskReady.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskReady);
 		FlightControl->OnFlyToPointProgress.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlyToPointProgress);
+		FlightControl->OnDrcStatusNotify.AddDynamic(this, &UUAVMqttBridgeComponent::OnDrcStatusNotify);
 	}
 	if (CameraStream)
 	{
@@ -145,6 +161,7 @@ void UUAVMqttBridgeComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		FlightControl->OnReturnHomeStatus.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnReturnHomeStatus);
 		FlightControl->OnFlighttaskReady.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskReady);
 		FlightControl->OnFlyToPointProgress.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlyToPointProgress);
+		FlightControl->OnDrcStatusNotify.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnDrcStatusNotify);
 	}
 	if (CameraStream)
 	{
@@ -214,6 +231,7 @@ void UUAVMqttBridgeComponent::Disconnect()
 	MqttClient->Disconnect(DisconnectDelegate);
 	MqttClient = nullptr;
 	ServicesSubscription = nullptr;
+	DrcSubscription = nullptr;
 	bConnected = false;
 }
 
@@ -232,6 +250,16 @@ void UUAVMqttBridgeComponent::OnMqttConnect(EMQTTConnectReturnCode ReturnCode)
 			UMQTTSubscriptionObject::FOnMessageDelegate MessageDelegate;
 			MessageDelegate.BindUFunction(this, TEXT("OnServicesMessage"));
 			ServicesSubscription->SetOnMessageHandler(MessageDelegate);
+		}
+
+		// 订阅机场 DRC 指令 topic（thing/product/{sn}/drc/down）
+		const FString DrcTopic = MakeTopic(kTopicDrcDownTemplate, DockSn);
+		DrcSubscription = MqttClient->Subscribe(DrcTopic, EMQTTQualityOfService::Once);
+		if (DrcSubscription)
+		{
+			UMQTTSubscriptionObject::FOnMessageDelegate DrcDelegate;
+			DrcDelegate.BindUFunction(this, TEXT("OnDrcMessage"));
+			DrcSubscription->SetOnMessageHandler(DrcDelegate);
 		}
 
 		// 上报上线状态
@@ -278,6 +306,18 @@ void UUAVMqttBridgeComponent::OnServicesMessage(const FMQTTClientMessage& InMess
 	DispatchServicesMessage(PayloadJson, SourceSn);
 }
 
+void UUAVMqttBridgeComponent::OnDrcMessage(const FMQTTClientMessage& InMessage)
+{
+	const FString& PayloadJson = InMessage.GetPayloadAsString();
+	if (PayloadJson.IsEmpty())
+	{
+		return;
+	}
+	// 提取报文来源设备 SN（topic 形如 thing/product/{sn}/drc/down）
+	const FString SourceSn = ParseSnFromDrcTopic(InMessage.Topic);
+	DispatchDrcMessage(PayloadJson, SourceSn);
+}
+
 void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJson, const FString& InSn)
 {
 	TSharedPtr<FJsonObject> Root;
@@ -315,7 +355,12 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 		|| Method.StartsWith(TEXT("video_storage_")) || Method.StartsWith(TEXT("ir_metering_"))
 		|| Method.StartsWith(TEXT("poi_"));
 
-	if (bIsFlightCommand && FlightControl)
+	// DRC 模式指令走 services 通道，精确匹配（其余 drc_* 前缀方法仍按未知指令处理）
+	if ((Method == kMethodDrcModeEnter || Method == kMethodDrcModeExit) && FlightControl)
+	{
+		Result = FlightControl->HandleCommand(Method, DataJson);
+	}
+	else if (bIsFlightCommand && FlightControl)
 	{
 		Result = FlightControl->HandleCommand(Method, DataJson);
 	}
@@ -342,6 +387,48 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 	OnServiceCommandReceived.Broadcast(Method);
 }
 
+void UUAVMqttBridgeComponent::DispatchDrcMessage(const FString& InPayloadJson, const FString& InSn)
+{
+	TSharedPtr<FJsonObject> Root;
+	if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InPayloadJson), Root) || !Root.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] drc/down 报文解析失败: %s"), *InPayloadJson);
+		return;
+	}
+
+	const FString Tid = Root->GetStringField(TEXT("tid"));
+	const FString Bid = Root->GetStringField(TEXT("bid"));
+	const FString Method = Root->GetStringField(TEXT("method"));
+	if (Method.IsEmpty())
+	{
+		return;
+	}
+
+	// 取 data 字段并序列化为 JSON 字符串传给飞控
+	FString DataJson;
+	if (Root->HasField(TEXT("data")))
+	{
+		const TSharedPtr<FJsonObject> DataObj = Root->GetObjectField(TEXT("data"));
+		if (DataObj.IsValid())
+		{
+			DataJson = SerializeJson(DataObj.ToSharedRef());
+		}
+	}
+
+	int32 Result = UAV::FlightControlResult::UnknownMethod;
+	if (FlightControl)
+	{
+		Result = FlightControl->HandleCommand(Method, DataJson);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] 飞控未注入，无法处理 DRC 指令: %s"), *Method);
+	}
+
+	// 回发 drc/up 回执（按来源设备 SN，缺省回退机场 SN）
+	PublishDrcUpReply(Method, Tid, Bid, Result, InSn);
+}
+
 void UUAVMqttBridgeComponent::PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn)
 {
 	if (!MqttClient || !bConnected)
@@ -359,6 +446,29 @@ void UUAVMqttBridgeComponent::PublishServicesReply(const FString& InMethod, cons
 		Msg.SetPayloadFromString(Json);
 		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
 		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 回复 %s -> result=%d"), *InMethod, InResult);
+	}
+}
+
+void UUAVMqttBridgeComponent::PublishDrcUpReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn)
+{
+	if (!MqttClient || !bConnected)
+	{
+		return;
+	}
+	// drone_control / heart_beat 回执携带最近 seq；drone_emergency_stop 仅 result
+	const bool bIncludeSeq = (InMethod == kMethodDroneControl || InMethod == kMethodHeartBeat);
+	const int32 Seq = (FlightControl && bIncludeSeq) ? FlightControl->GetLastDrcSeq() : -1;
+	const TSharedRef<FJsonObject> Reply = BuildDrcUpReply(InMethod, InTid, InBid, InResult, Seq).ToSharedRef();
+	const FString TargetSn = InSn.IsEmpty() ? DockSn : InSn;
+	const FString Topic = MakeTopic(kTopicDrcUpTemplate, TargetSn);
+	const FString Json = SerializeJson(Reply);
+	if (!Json.IsEmpty())
+	{
+		FMQTTClientMessage Msg;
+		Msg.Topic = Topic;
+		Msg.SetPayloadFromString(Json);
+		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] DRC 回执 %s -> result=%d"), *InMethod, InResult);
 	}
 }
 
@@ -573,6 +683,12 @@ void UUAVMqttBridgeComponent::OnFlyToPointProgress(const FString& InStatus, cons
 {
 	PublishEvent(kEventFlyToPointProgress, BuildFlyToPointProgressEventData(InStatus, InFlyToId, InWayPointIndex, InResult));
 	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布指点飞行进度事件：status=%s fly_to_id=%s way_point_index=%d result=%d"), *InStatus, *InFlyToId, InWayPointIndex, InResult);
+}
+
+void UUAVMqttBridgeComponent::OnDrcStatusNotify(int32 InDrcState)
+{
+	PublishEvent(kEventDrcStatusNotify, BuildDrcStatusNotifyData(InDrcState));
+	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布 DRC 状态事件：drc_state=%d"), InDrcState);
 }
 
 // ---- OSD 组装 ----
@@ -987,6 +1103,27 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildHmsPayload(bool bLowBatter
 		List.Add(MakeShared<FJsonValueObject>(Alarm));
 	}
 	Data->SetArrayField(TEXT("list"), List);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDrcUpReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, int32 InSeq) const
+{
+	// 对齐 dock DrcUpData：{tid, bid, timestamp, method, data:{result, output?:{seq}}}，复用 services_reply 结构
+	TSharedPtr<FJsonObject> Output;
+	if (InSeq >= 0)
+	{
+		Output = MakeShared<FJsonObject>();
+		Output->SetNumberField(TEXT("seq"), InSeq);
+	}
+	return MakeServicesReply(InMethod, InTid, InBid, InResult, Output);
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDrcStatusNotifyData(int32 InDrcState) const
+{
+	// 对齐 dock EventsDataRequest<DrcState>：data={result:0, drc_state}
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), 0);
+	Data->SetNumberField(TEXT("drc_state"), InDrcState);
 	return Data;
 }
 

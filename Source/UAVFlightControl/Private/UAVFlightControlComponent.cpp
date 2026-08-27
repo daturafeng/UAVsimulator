@@ -167,6 +167,26 @@ int32 UUAVFlightControlComponent::HandleCommand(const FString& InMethod, const F
 	{
 		Result = HandleFlyToPointUpdate(Data);
 	}
+	else if (Method == kMethodDrcModeEnter)
+	{
+		Result = HandleDrcModeEnter(Data);
+	}
+	else if (Method == kMethodDrcModeExit)
+	{
+		Result = HandleDrcModeExit(Data);
+	}
+	else if (Method == kMethodDroneControl)
+	{
+		Result = HandleDroneControl(Data);
+	}
+	else if (Method == kMethodHeartBeat)
+	{
+		Result = HandleHeartBeat(Data);
+	}
+	else if (Method == kMethodDroneEmergencyStop)
+	{
+		Result = HandleDroneEmergencyStop(Data);
+	}
 	else
 	{
 		Result = UnknownMethod;
@@ -435,6 +455,92 @@ int32 UUAVFlightControlComponent::HandleFlyToPointUpdate(const TSharedPtr<FJsonO
 	DroneSim->SetWaypoints({ Target }, true);
 	OnFlyToPointProgress.Broadcast(TEXT("wayline_progress"), CurrentFlyToId, 0, Success);
 	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 指点飞行更新：fly_to_id=%s 新目标(%.6f, %.6f) 高度=%.1fm 速度=%.1fm/s"), *CurrentFlyToId, Target.Latitude, Target.Longitude, Target.Altitude, MaxSpeed);
+	return Success;
+}
+
+int32 UUAVFlightControlComponent::HandleDrcModeEnter(const TSharedPtr<FJsonObject>& InData)
+{
+	using namespace UAV::FlightControlResult;
+	if (!bHasFlightAuthority) return NoAuthority;
+	// DRC 直控要求无人机已离地（待机状态禁止进入）
+	if (FlightState == EUAVFlightState::Idle) return StateConflict;
+
+	bDrcActive = true;
+	OnDrcStatusNotify.Broadcast(2);
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 进入 DRC 会话"));
+	return Success;
+}
+
+int32 UUAVFlightControlComponent::HandleDrcModeExit(const TSharedPtr<FJsonObject>& InData)
+{
+	using namespace UAV::FlightControlResult;
+	if (!bHasFlightAuthority) return NoAuthority;
+	if (!bDrcActive) return StateConflict;
+
+	// 退出会话：停止摇杆控制并复位会话状态
+	bDrcActive = false;
+	if (bJoystickControlActive && DroneSim)
+	{
+		DroneSim->SetJoystickActive(false);
+	}
+	bJoystickControlActive = false;
+	OnDrcStatusNotify.Broadcast(0);
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 退出 DRC 会话"));
+	return Success;
+}
+
+int32 UUAVFlightControlComponent::HandleDroneControl(const TSharedPtr<FJsonObject>& InData)
+{
+	using namespace UAV::FlightControlResult;
+	if (!DroneSim) return InternalError;
+	if (!bDrcActive) return StateConflict;
+
+	// 参数范围对齐 dock 校验口径：x/y ∈ [-17,17]、h ∈ [-4,5]、w ∈ [-90,90]、freq ∈ [2,10]、delayTime ∈ [100,1000]
+	const int32 Seq = static_cast<int32>(ReadNumber(InData, TEXT("seq"), -1.0));
+	const int32 X = static_cast<int32>(ReadNumber(InData, TEXT("x"), 0.0));
+	const int32 Y = static_cast<int32>(ReadNumber(InData, TEXT("y"), 0.0));
+	const int32 H = static_cast<int32>(ReadNumber(InData, TEXT("h"), 0.0));
+	const int32 W = static_cast<int32>(ReadNumber(InData, TEXT("w"), 0.0));
+	const int32 Freq = static_cast<int32>(ReadNumber(InData, TEXT("freq"), 0.0));
+	const int32 DelayTime = static_cast<int32>(ReadNumber(InData, TEXT("delayTime"), 0.0));
+
+	if (Seq < 0 || X < -17 || X > 17 || Y < -17 || Y > 17 || H < -4 || H > 5
+		|| W < -90 || W > 90 || Freq < 2 || Freq > 10 || DelayTime < 100 || DelayTime > 1000)
+	{
+		return InvalidParams;
+	}
+
+	// 停止现有任务并驱动摇杆速度（DRC 直控与任务互斥）
+	DroneSim->StopMission();
+	DroneSim->SetJoystickCommand(X, Y, H, W, Freq, DelayTime);
+	bJoystickControlActive = true;
+	LastDrcSeq = Seq;
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 摇杆控制：seq=%d x=%d y=%d h=%d w=%d freq=%d delayTime=%d"), Seq, X, Y, H, W, Freq, DelayTime);
+	return Success;
+}
+
+int32 UUAVFlightControlComponent::HandleHeartBeat(const TSharedPtr<FJsonObject>& InData)
+{
+	using namespace UAV::FlightControlResult;
+	if (!bDrcActive) return StateConflict;
+
+	const int32 Seq = static_cast<int32>(ReadNumber(InData, TEXT("seq"), -1.0));
+	if (Seq < 0) return InvalidParams;
+	LastDrcSeq = Seq;
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] DRC 心跳：seq=%d"), Seq);
+	return Success;
+}
+
+int32 UUAVFlightControlComponent::HandleDroneEmergencyStop(const TSharedPtr<FJsonObject>& InData)
+{
+	using namespace UAV::FlightControlResult;
+	if (!DroneSim) return InternalError;
+
+	// 急停：无条件停止一切运动与任务，保持 DRC 会话（对齐真实设备行为）
+	DroneSim->SetJoystickActive(false);
+	DroneSim->StopMission();
+	bJoystickControlActive = false;
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] DRC 急停：停止全部运动"));
 	return Success;
 }
 

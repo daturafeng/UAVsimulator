@@ -69,6 +69,12 @@ public:
 	/** 组装 hms 事件 data（data.list；InLowBatteryAlarm 为 true 时含低电量告警；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildHmsPayload(bool bLowBatteryAlarm = false) const;
 
+	/** 组装 drc/up 回执 data 报文（对齐 dock DrcUpData：data={result, output?:{seq}}；InSeq<0 时不带 output；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildDrcUpReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, int32 InSeq) const;
+
+	/** 组装 drc_status_notify 事件 data（对齐 dock DrcStateEnum：data={result:0, drc_state}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildDrcStatusNotifyData(int32 InDrcState) const;
+
 	// ---- 配置（默认值对齐 dock 联调环境） ----
 	/** Broker 地址 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
@@ -147,13 +153,22 @@ protected:
 	UFUNCTION()
 	void OnServicesMessage(const FMQTTClientMessage& InMessage);
 
+	UFUNCTION()
+	void OnDrcMessage(const FMQTTClientMessage& InMessage);
+
 	// ---- 指令分发 ----
 	/** 解析 services 报文并按 method 分发到飞控/相机，回发 services_reply（InSn 为报文来源设备 SN，空则回退机场 SN） */
 	void DispatchServicesMessage(const FString& InPayloadJson, const FString& InSn = FString());
 
+	/** 解析 drc/down 报文并按 method 分发到飞控，回发 drc/up（InSn 为报文来源设备 SN，空则回退机场 SN） */
+	void DispatchDrcMessage(const FString& InPayloadJson, const FString& InSn = FString());
+
 	// ---- 发布 ----
 	/** 发布 services_reply（thing/product/{sn}/services_reply，InSn 空则用机场 SN） */
 	void PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn = FString());
+
+	/** 发布 drc/up 回执（thing/product/{sn}/drc/up，InSn 空则用机场 SN；drone_control/heart_beat 带 output.seq，drone_emergency_stop 仅 result） */
+	void PublishDrcUpReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn = FString());
 
 	/** 发布事件（thing/product/{DockSn}/events，含 gateway） */
 	void PublishEvent(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InTid = FString(), const FString& InBid = FString());
@@ -204,6 +219,9 @@ protected:
 	UFUNCTION()
 	void OnFlyToPointProgress(const FString& InStatus, const FString& InFlyToId, int32 InWayPointIndex, int32 InResult);
 
+	UFUNCTION()
+	void OnDrcStatusNotify(int32 InDrcState);
+
 	// ---- OSD 组装 ----
 	/** 从无人机模拟组件读取遥测，组装无人机 OSD data（对齐 dock report_drone_osd.py） */
 	TSharedPtr<FJsonObject> BuildDroneOsdPayload() const;
@@ -241,6 +259,10 @@ private:
 	/** services 订阅对象 */
 	UPROPERTY(Transient)
 	TObjectPtr<UMQTTSubscriptionObject> ServicesSubscription;
+
+	/** drc/down 订阅对象 */
+	UPROPERTY(Transient)
+	TObjectPtr<UMQTTSubscriptionObject> DrcSubscription;
 
 	/** 已连接 */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge", meta = (AllowPrivateAccess = "true"))

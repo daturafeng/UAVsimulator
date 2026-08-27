@@ -39,6 +39,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVFlighttaskReadyDelegate, const F
 /** 指点飞行进度事件（Status: wayline_progress / wayline_ok / wayline_cancel / wayline_failed，对齐 dock FlyToStatusEnum；Result: 0=成功） */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FUAVFlyToPointProgressDelegate, const FString&, Status, const FString&, FlyToId, int32, WayPointIndex, int32, Result);
 
+/** DRC 会话状态事件（参数：drc_state，对齐 dock DrcStateEnum：0=断开、1=连接中、2=已连接） */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVDrcStatusNotifyDelegate, int32, DrcState);
+
 /** 航线任务条目：flighttask_create/prepare 阶段登记，execute 时消费 */
 struct FUAVMissionEntry
 {
@@ -100,6 +103,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "UAV|FlightControl")
 	double GetCurrentRthAltitude() const { return CurrentRthAltitude; }
 
+	/** 最近一次 DRC 指令（drone_control / heart_beat）携带的 seq；未收到时返回 -1 */
+	UFUNCTION(BlueprintPure, Category = "UAV|FlightControl")
+	int32 GetLastDrcSeq() const { return LastDrcSeq; }
+
 	/** 指令处理结果事件 */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
 	FUAVCommandResultDelegate OnCommandResult;
@@ -124,6 +131,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
 	FUAVFlyToPointProgressDelegate OnFlyToPointProgress;
 
+	/** DRC 会话状态事件（进入/退出时广播） */
+	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
+	FUAVDrcStatusNotifyDelegate OnDrcStatusNotify;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -142,6 +153,11 @@ protected:
 	int32 HandleFlyToPoint(const TSharedPtr<FJsonObject>& InData);
 	int32 HandleFlyToPointStop(const TSharedPtr<FJsonObject>& InData);
 	int32 HandleFlyToPointUpdate(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleDrcModeEnter(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleDrcModeExit(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleDroneControl(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleHeartBeat(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleDroneEmergencyStop(const TSharedPtr<FJsonObject>& InData);
 
 	// ---- 状态机辅助 ----
 	/** 状态迁移：同步飞控状态与无人机模拟组件 */
@@ -195,4 +211,13 @@ private:
 
 	/** 当前指点飞行 fly_to_id */
 	FString CurrentFlyToId;
+
+	/** DRC 会话激活（drc_mode_enter 后为 true，exit 后为 false） */
+	bool bDrcActive = false;
+
+	/** 摇杆直控激活（drone_control 成功后为 true，急停/退出 DRC 后为 false） */
+	bool bJoystickControlActive = false;
+
+	/** 最近 DRC 指令 seq（drone_control / heart_beat；用于 drc/up 回执 output.seq） */
+	int32 LastDrcSeq = -1;
 };
