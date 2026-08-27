@@ -15,7 +15,7 @@ UAVMqttBridge MUST 提供可配置的 MQTT 连接（broker 地址、端口、用
 - **THEN** 组件保持未连接状态并通过连接状态事件广播失败原因
 
 ### Requirement: 指令订阅与分发
-UAVMqttBridge MUST 订阅 thing/product/{机场SN}/services，将收到的 services 报文（tid/bid/method/data）按 method 分发到对应处理组件（UAVFlightControl / UAVCameraStream），并把处理结果（result 码）回发到 thing/product/{机场SN}/services_reply。
+UAVMqttBridge MUST 订阅 thing/product/{机场SN}/services，将收到的 services 报文（tid/bid/method/data）按 method 分发到对应处理组件（UAVFlightControl / UAVCameraStream），并把处理结果（result 码）回发到 thing/product/{机场SN}/services_reply。飞控指令分发 MUST 覆盖 fly_to_point / fly_to_point_stop / fly_to_point_update 前缀（fly_）。
 
 #### Scenario: 服务指令分发
 - **WHEN** 收到 method 为 takeoff_to_point / flighttask_* / return_home_* / flight_authority_grab 的 services 报文
@@ -28,6 +28,10 @@ UAVMqttBridge MUST 订阅 thing/product/{机场SN}/services，将收到的 servi
 #### Scenario: 未知指令回复
 - **WHEN** 收到不认识的 method
 - **THEN** 回发 result 非 0 的 services_reply，不抛异常
+
+#### Scenario: 指点飞行指令分发
+- **WHEN** 收到 method 为 fly_to_point / fly_to_point_stop / fly_to_point_update 的 services 报文
+- **THEN** 调用 UAVFlightControl.HandleCommand，并将返回的 result 码组装 services_reply 发布
 
 ### Requirement: 事件转发
 UAVMqttBridge MUST 订阅 UAVFlightControl 的进度/结果委托与 UAVCameraStream 的直播状态委托，将事件拼装为 thing/product/{机场SN}/events 报文（含 tid/bid/timestamp/gateway/method/data）发布。
@@ -43,6 +47,10 @@ UAVMqttBridge MUST 订阅 UAVFlightControl 的进度/结果委托与 UAVCameraSt
 #### Scenario: 直播状态事件
 - **WHEN** 相机直播状态变化（开始/停止/清晰度/镜头切换）
 - **THEN** 发布 events 报文（live_status 等），data 含 status/video_id/video_quality/video_type
+
+#### Scenario: 指点飞行进度事件
+- **WHEN** 飞控广播 fly_to_point_progress（wayline_progress / wayline_ok / wayline_cancel）
+- **THEN** 发布 events 报文，method=fly_to_point_progress，data 为 { result, status, fly_to_id, way_point_index }，对齐 dock FlyToPointProgress / FlyToStatusEnum
 
 ### Requirement: OSD 遥测上报
 UAVMqttBridge MUST 周期（默认 1 秒，可配置）从 UAVDroneSim 读取无人机位置/高度/朝向/速度，组装 OSD 报文发布到 thing/product/{无人机SN}/osd，字段结构对齐 dock report_drone_osd.py（经纬度、高度、朝向、水平/垂直速度、模式编码、电量、载荷云台、摄像头状态等）。
@@ -188,3 +196,4 @@ UAVMqttBridge MUST 在 MQTT 连接成功后向 thing/product/{机场SN}/state �
 #### Scenario: 无人机主载荷可切换类型
 - **WHEN** 组装无人机设备项的相机索引（52-0-0）视频列表
 - **THEN** video_type 为 zoom、switchable_video_types 为 [normal, wide, zoom, ir]
+

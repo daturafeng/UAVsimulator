@@ -38,6 +38,35 @@ namespace
 		}
 		return Value;
 	}
+
+/**
+ * 解析指点飞行目标点（dock Point：latitude/longitude/height，height 2-10000）。
+ * points 数组取首个点（M30 系列仅支持单点），解析成功返回 true 并填充 OutTarget。
+ */
+bool ParseFlyToTarget(const TSharedPtr<FJsonObject>& InData, FUAVWaypoint& OutTarget)
+{
+	if (!InData.IsValid()) return false;
+	const TArray<TSharedPtr<FJsonValue>>* Points = nullptr;
+	if (!InData->TryGetArrayField(TEXT("points"), Points) || Points->Num() == 0) return false;
+	const TSharedPtr<FJsonObject> Point = (*Points)[0]->AsObject();
+	if (!Point.IsValid()) return false;
+
+	double Latitude = 0.0;
+	double Longitude = 0.0;
+	double Height = 0.0;
+	if (!Point->TryGetNumberField(TEXT("latitude"), Latitude)) return false;
+	if (!Point->TryGetNumberField(TEXT("longitude"), Longitude)) return false;
+	if (!Point->TryGetNumberField(TEXT("height"), Height)) return false;
+	if (Latitude < -90.0 || Latitude > 90.0) return false;
+	if (Longitude < -180.0 || Longitude > 180.0) return false;
+	if (Height < 2.0 || Height > 10000.0) return false;
+
+	OutTarget.Latitude = Latitude;
+	OutTarget.Longitude = Longitude;
+	OutTarget.Altitude = Height;
+	OutTarget.ArrivalThresholdMeters = 1.5;
+	return true;
+}
 }
 
 UUAVFlightControlComponent::UUAVFlightControlComponent()
@@ -125,6 +154,18 @@ int32 UUAVFlightControlComponent::HandleCommand(const FString& InMethod, const F
 	else if (Method == kMethodReturnHomeCancel)
 	{
 		Result = HandleReturnHomeCancel(Data);
+	}
+	else if (Method == kMethodFlyToPoint)
+	{
+		Result = HandleFlyToPoint(Data);
+	}
+	else if (Method == kMethodFlyToPointStop)
+	{
+		Result = HandleFlyToPointStop(Data);
+	}
+	else if (Method == kMethodFlyToPointUpdate)
+	{
+		Result = HandleFlyToPointUpdate(Data);
 	}
 	else
 	{
@@ -330,6 +371,73 @@ int32 UUAVFlightControlComponent::HandleReturnHomeCancel(const TSharedPtr<FJsonO
 	return Success;
 }
 
+int32 UUAVFlightControlComponent::HandleFlyToPoint(const TSharedPtr<FJsonObject>& InData)
+{
+	using namespace UAV::FlightControlResult;
+	if (!DroneSim) return InternalError;
+	if (!bHasFlightAuthority) return NoAuthority;
+	if (FlightState == EUAVFlightState::TakingOff || FlightState == EUAVFlightState::Wayline
+		|| FlightState == EUAVFlightState::ReturnHome || FlightState == EUAVFlightState::Landing)
+	{
+		return StateConflict;
+	}
+
+	const FString FlyToId = ReadString(InData, TEXT("fly_to_id"));
+	const double MaxSpeed = ReadNumber(InData, TEXT("max_speed"));
+	if (FlyToId.IsEmpty()) return InvalidParams;
+	if (MaxSpeed < 1.0 || MaxSpeed > 15.0) return InvalidParams;
+
+	FUAVWaypoint Target;
+	if (!ParseFlyToTarget(InData, Target)) return InvalidParams;
+
+	// 中断当前任务并飞向目标点（指点飞行复用空中巡航状态）
+	DroneSim->StopMission();
+	DroneSim->MaxHorizontalSpeed = MaxSpeed;
+	CurrentFlyToId = FlyToId;
+	bFlyToActive = true;
+	TransitionTo(EUAVFlightState::Flying);
+	DroneSim->SetWaypoints({ Target }, true);
+	OnFlyToPointProgress.Broadcast(TEXT("wayline_progress"), FlyToId, 0, Success);
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 指点飞行开始：fly_to_id=%s 目标(%.6f, %.6f) 高度=%.1fm 速度=%.1fm/s"), *FlyToId, Target.Latitude, Target.Longitude, Target.Altitude, MaxSpeed);
+	return Success;
+}
+
+int32 UUAVFlightControlComponent::HandleFlyToPointStop(const TSharedPtr<FJsonObject>& InData)
+{
+	using namespace UAV::FlightControlResult;
+	if (!DroneSim) return InternalError;
+	if (!bHasFlightAuthority) return NoAuthority;
+	if (!bFlyToActive) return StateConflict;
+
+	DroneSim->StopMission();
+	bFlyToActive = false;
+	TransitionTo(EUAVFlightState::Flying);
+	OnFlyToPointProgress.Broadcast(TEXT("wayline_cancel"), CurrentFlyToId, 0, Success);
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 指点飞行停止：fly_to_id=%s"), *CurrentFlyToId);
+	return Success;
+}
+
+int32 UUAVFlightControlComponent::HandleFlyToPointUpdate(const TSharedPtr<FJsonObject>& InData)
+{
+	using namespace UAV::FlightControlResult;
+	if (!DroneSim) return InternalError;
+	if (!bHasFlightAuthority) return NoAuthority;
+	if (!bFlyToActive || FlightState != EUAVFlightState::Flying) return StateConflict;
+
+	const double MaxSpeed = ReadNumber(InData, TEXT("max_speed"));
+	if (MaxSpeed < 1.0 || MaxSpeed > 15.0) return InvalidParams;
+
+	FUAVWaypoint Target;
+	if (!ParseFlyToTarget(InData, Target)) return InvalidParams;
+
+	// 复用当前指点飞行会话：更新目标点与速度
+	DroneSim->MaxHorizontalSpeed = MaxSpeed;
+	DroneSim->SetWaypoints({ Target }, true);
+	OnFlyToPointProgress.Broadcast(TEXT("wayline_progress"), CurrentFlyToId, 0, Success);
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 指点飞行更新：fly_to_id=%s 新目标(%.6f, %.6f) 高度=%.1fm 速度=%.1fm/s"), *CurrentFlyToId, Target.Latitude, Target.Longitude, Target.Altitude, MaxSpeed);
+	return Success;
+}
+
 void UUAVFlightControlComponent::TransitionTo(EUAVFlightState InNewState)
 {
 	FlightState = InNewState;
@@ -404,6 +512,11 @@ void UUAVFlightControlComponent::OnDroneWaypointReached(int32 WaypointIndex)
 		const int32 Percent = Total > 0 ? (WaypointIndex + 1) * 100 / Total : 0;
 		OnFlighttaskProgress.Broadcast(TEXT("in_progress"), CurrentFlightId, WaypointIndex, Percent);
 	}
+	else if (bFlyToActive)
+	{
+		// 指点飞行到达目标点（单点航线）：广播进度（航点索引与无人机模拟组件一致，0 基）
+		OnFlyToPointProgress.Broadcast(TEXT("wayline_progress"), CurrentFlyToId, WaypointIndex, UAV::FlightControlResult::Success);
+	}
 }
 
 void UUAVFlightControlComponent::OnDroneMissionFinished()
@@ -419,6 +532,13 @@ void UUAVFlightControlComponent::OnDroneMissionFinished()
 	{
 		OnFlighttaskProgress.Broadcast(TEXT("ok"), CurrentFlightId, 0, 100);
 		TransitionTo(EUAVFlightState::Flying);
+	}
+	else if (bFlyToActive)
+	{
+		// 指点飞行完成：到达目标点后悬停，保持空中巡航状态
+		OnFlyToPointProgress.Broadcast(TEXT("wayline_ok"), CurrentFlyToId, 0, UAV::FlightControlResult::Success);
+		bFlyToActive = false;
+		UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 指点飞行完成：fly_to_id=%s"), *CurrentFlyToId);
 	}
 	else if (FlightState == EUAVFlightState::ReturnHome)
 	{

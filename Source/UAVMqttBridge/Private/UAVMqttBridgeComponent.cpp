@@ -120,6 +120,7 @@ void UUAVMqttBridgeComponent::BeginPlay()
 		FlightControl->OnFlighttaskProgress.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskProgress);
 		FlightControl->OnReturnHomeStatus.AddDynamic(this, &UUAVMqttBridgeComponent::OnReturnHomeStatus);
 		FlightControl->OnFlighttaskReady.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskReady);
+		FlightControl->OnFlyToPointProgress.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlyToPointProgress);
 	}
 	if (CameraStream)
 	{
@@ -143,6 +144,7 @@ void UUAVMqttBridgeComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		FlightControl->OnFlighttaskProgress.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskProgress);
 		FlightControl->OnReturnHomeStatus.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnReturnHomeStatus);
 		FlightControl->OnFlighttaskReady.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskReady);
+		FlightControl->OnFlyToPointProgress.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlyToPointProgress);
 	}
 	if (CameraStream)
 	{
@@ -306,7 +308,7 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 
 	int32 Result = UAV::FlightControlResult::UnknownMethod;
 	const bool bIsFlightCommand = Method.StartsWith(TEXT("flight_")) || Method.StartsWith(TEXT("takeoff_"))
-		|| Method.StartsWith(TEXT("return_home"));
+		|| Method.StartsWith(TEXT("return_home")) || Method.StartsWith(TEXT("fly_"));
 	const bool bIsLiveCommand = Method.StartsWith(TEXT("live_"));
 	const bool bIsPayloadCommand = Method.StartsWith(TEXT("camera_")) || Method.StartsWith(TEXT("payload_"))
 		|| Method.StartsWith(TEXT("gimbal_")) || Method.StartsWith(TEXT("photo_storage_"))
@@ -565,6 +567,12 @@ void UUAVMqttBridgeComponent::OnFlighttaskReady(const FString& InFlightId)
 {
 	PublishEvent(kEventFlighttaskReady, BuildFlighttaskReadyData(InFlightId));
 	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布任务就绪事件：flight_id=%s"), *InFlightId);
+}
+
+void UUAVMqttBridgeComponent::OnFlyToPointProgress(const FString& InStatus, const FString& InFlyToId, int32 InWayPointIndex, int32 InResult)
+{
+	PublishEvent(kEventFlyToPointProgress, BuildFlyToPointProgressEventData(InStatus, InFlyToId, InWayPointIndex, InResult));
+	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布指点飞行进度事件：status=%s fly_to_id=%s way_point_index=%d result=%d"), *InStatus, *InFlyToId, InWayPointIndex, InResult);
 }
 
 // ---- OSD 组装 ----
@@ -916,6 +924,17 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildFlighttaskProgressEventDat
 	Output->SetObjectField(TEXT("ext"), Ext);
 
 	Data->SetObjectField(TEXT("output"), Output);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildFlyToPointProgressEventData(const FString& InStatus, const FString& InFlyToId, int32 InWayPointIndex, int32 InResult) const
+{
+	// 对齐 dock FlyToPointProgress：data = { result, status, fly_to_id, way_point_index }
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), InResult);
+	Data->SetStringField(TEXT("status"), InStatus);
+	Data->SetStringField(TEXT("fly_to_id"), InFlyToId);
+	Data->SetNumberField(TEXT("way_point_index"), InWayPointIndex);
 	return Data;
 }
 

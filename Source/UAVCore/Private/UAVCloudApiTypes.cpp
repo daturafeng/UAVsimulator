@@ -24,6 +24,9 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodFlighttaskRecovery = TEXT("flighttask_recovery");
 	const TCHAR* kMethodReturnHome = TEXT("return_home");
 	const TCHAR* kMethodReturnHomeCancel = TEXT("return_home_cancel");
+	const TCHAR* kMethodFlyToPoint = TEXT("fly_to_point");
+	const TCHAR* kMethodFlyToPointStop = TEXT("fly_to_point_stop");
+	const TCHAR* kMethodFlyToPointUpdate = TEXT("fly_to_point_update");
 	const TCHAR* kMethodLiveStartPush = TEXT("live_start_push");
 	const TCHAR* kMethodLiveStopPush = TEXT("live_stop_push");
 	const TCHAR* kMethodLiveSetQuality = TEXT("live_set_quality");
@@ -65,6 +68,7 @@ namespace UAV::CloudApi
 	const TCHAR* kEventReturnHomeInfo = TEXT("return_home_info");
 	const TCHAR* kEventFlighttaskReady = TEXT("flighttask_ready");
 	const TCHAR* kEventHms = TEXT("hms");
+	const TCHAR* kEventFlyToPointProgress = TEXT("fly_to_point_progress");
 
 	FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality)
 	{

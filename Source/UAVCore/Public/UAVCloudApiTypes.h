@@ -28,6 +28,9 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kMethodFlighttaskRecovery;		// flighttask_recovery
 	UAVCORE_API extern const TCHAR* kMethodReturnHome;				// return_home
 	UAVCORE_API extern const TCHAR* kMethodReturnHomeCancel;		// return_home_cancel
+	UAVCORE_API extern const TCHAR* kMethodFlyToPoint;				// fly_to_point
+	UAVCORE_API extern const TCHAR* kMethodFlyToPointStop;			// fly_to_point_stop
+	UAVCORE_API extern const TCHAR* kMethodFlyToPointUpdate;		// fly_to_point_update
 	UAVCORE_API extern const TCHAR* kMethodLiveStartPush;			// live_start_push
 	UAVCORE_API extern const TCHAR* kMethodLiveStopPush;			// live_stop_push
 	UAVCORE_API extern const TCHAR* kMethodLiveSetQuality;			// live_set_quality
@@ -69,6 +72,7 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kEventReturnHomeInfo;			// return_home_info（对齐 dock EventsMethodEnum）
 	UAVCORE_API extern const TCHAR* kEventFlighttaskReady;			// flighttask_ready
 	UAVCORE_API extern const TCHAR* kEventHms;						// hms
+	UAVCORE_API extern const TCHAR* kEventFlyToPointProgress;		// fly_to_point_progress
 
 	// ---- 视频清晰度档位（与上云 API video_quality 语义一致）----
 	/** 推流参数（分辨率/码率/帧率） */

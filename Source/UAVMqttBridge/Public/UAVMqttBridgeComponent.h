@@ -63,6 +63,9 @@ public:
 	/** 组装 flighttask_ready 事件 data（data.flight_ids；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildFlighttaskReadyData(const FString& InFlightId) const;
 
+	/** 组装 fly_to_point_progress 事件 data（对齐 dock FlyToPointProgress：data = { result, status, fly_to_id, way_point_index }；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildFlyToPointProgressEventData(const FString& InStatus, const FString& InFlyToId, int32 InWayPointIndex, int32 InResult) const;
+
 	/** 组装 hms 事件 data（data.list；InLowBatteryAlarm 为 true 时含低电量告警；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildHmsPayload(bool bLowBatteryAlarm = false) const;
 
@@ -197,6 +200,9 @@ protected:
 
 	UFUNCTION()
 	void OnFlighttaskReady(const FString& InFlightId);
+
+	UFUNCTION()
+	void OnFlyToPointProgress(const FString& InStatus, const FString& InFlyToId, int32 InWayPointIndex, int32 InResult);
 
 	// ---- OSD 组装 ----
 	/** 从无人机模拟组件读取遥测，组装无人机 OSD data（对齐 dock report_drone_osd.py） */

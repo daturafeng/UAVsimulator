@@ -36,6 +36,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FUAVReturnHomeStatusDelegate, const
 /** 任务就绪事件（flighttask_prepare 成功后广播，携带 flight_id） */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVFlighttaskReadyDelegate, const FString&, FlightId);
 
+/** 指点飞行进度事件（Status: wayline_progress / wayline_ok / wayline_cancel / wayline_failed，对齐 dock FlyToStatusEnum；Result: 0=成功） */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FUAVFlyToPointProgressDelegate, const FString&, Status, const FString&, FlyToId, int32, WayPointIndex, int32, Result);
+
 /** 航线任务条目：flighttask_create/prepare 阶段登记，execute 时消费 */
 struct FUAVMissionEntry
 {
@@ -117,6 +120,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
 	FUAVFlighttaskReadyDelegate OnFlighttaskReady;
 
+	/** 指点飞行进度事件 */
+	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
+	FUAVFlyToPointProgressDelegate OnFlyToPointProgress;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -132,6 +139,9 @@ protected:
 	int32 HandleFlighttaskRecovery(const TSharedPtr<FJsonObject>& InData);
 	int32 HandleReturnHome(const TSharedPtr<FJsonObject>& InData);
 	int32 HandleReturnHomeCancel(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleFlyToPoint(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleFlyToPointStop(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleFlyToPointUpdate(const TSharedPtr<FJsonObject>& InData);
 
 	// ---- 状态机辅助 ----
 	/** 状态迁移：同步飞控状态与无人机模拟组件 */
@@ -179,4 +189,10 @@ private:
 
 	/** 自动返航已触发（防抖：返航/降落期间不重复触发） */
 	bool bReturnHomePending = false;
+
+	/** 指点飞行会话活动标记（当前是否处于指点飞行） */
+	bool bFlyToActive = false;
+
+	/** 当前指点飞行 fly_to_id */
+	FString CurrentFlyToId;
 };
