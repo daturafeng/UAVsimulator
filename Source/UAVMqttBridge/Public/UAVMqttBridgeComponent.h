@@ -75,6 +75,15 @@ public:
 	/** 组装 drc_status_notify 事件 data（对齐 dock DrcStateEnum：data={result:0, drc_state}；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildDrcStatusNotifyData(int32 InDrcState) const;
 
+	/** 是否为远程调试/设备控制指令（精确匹配 20 个调试 method，对齐 dock DebugMethodEnum；自动化测试入口） */
+	static bool IsRemoteDebugMethod(const FString& InMethod);
+
+	/** 远程调试指令分发入口：校验带参指令并更新机场设备状态，返回 result（对齐 dock AbstractDebugService；自动化测试入口） */
+	int32 HandleDebugCommand(const FString& InMethod, const FString& InDataJson);
+
+	/** 组装 RemoteDebugProgress 进度事件 data（对齐 dock RemoteDebugProgress：data={result:0, output:{status, progress:{percent, currentStep, totalSteps, stepKey?, stepResult}}}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildRemoteDebugProgressEventData(const FString& InStatus, int32 InPercent, int32 InCurrentStep, int32 InTotalSteps, const FString& InStepKey, int32 InStepResult) const;
+
 	// ---- 配置（默认值对齐 dock 联调环境） ----
 	/** Broker 地址 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
@@ -164,8 +173,8 @@ protected:
 	void DispatchDrcMessage(const FString& InPayloadJson, const FString& InSn = FString());
 
 	// ---- 发布 ----
-	/** 发布 services_reply（thing/product/{sn}/services_reply，InSn 空则用机场 SN） */
-	void PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn = FString());
+	/** 发布 services_reply（thing/product/{sn}/services_reply，InSn 空则用机场 SN；InOutput 非空时 data 附带 output 字段，如远程调试成功回执 {status:"sent"}） */
+	void PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn = FString(), const TSharedPtr<FJsonObject>& InOutput = nullptr);
 
 	/** 发布 drc/up 回执（thing/product/{sn}/drc/up，InSn 空则用机场 SN；drone_control/heart_beat 带 output.seq，drone_emergency_stop 仅 result） */
 	void PublishDrcUpReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn = FString());
@@ -270,4 +279,57 @@ private:
 
 	/** OSD 周期计时累加器（秒） */
 	double OsdAccumulator = 0.0;
+
+	// ---- 机场设备模拟状态（远程调试指令驱动，OSD 联动输出）----
+	/** 调试模式已激活（debug_mode_open/close） */
+	UPROPERTY()
+	bool bDebugMode = false;
+
+	/** 补光灯开启（supplement_light_open/close） */
+	UPROPERTY()
+	bool bSupplementLight = false;
+
+	/** 声光报警开启（alarm_state_switch） */
+	UPROPERTY()
+	bool bAlarmState = false;
+
+	/** 推杆松开（putter_open/close） */
+	UPROPERTY()
+	bool bPutterOpen = false;
+
+	/** 舱门指令覆盖生效（cover_open/close 后为 true，覆盖归巢推导） */
+	UPROPERTY()
+	bool bCoverOverride = false;
+
+	/** 舱门打开状态（指令覆盖值：cover_open=1 / cover_close=0） */
+	UPROPERTY()
+	bool bCoverOpen = false;
+
+	/** 充电指令覆盖生效（charge_open/close 后为 true，覆盖电量推导） */
+	UPROPERTY()
+	bool bChargeOverride = false;
+
+	/** 充电打开状态（指令覆盖值：charge_open=1 / charge_close=0） */
+	UPROPERTY()
+	bool bChargeOpen = false;
+
+	/** 电池存储模式（battery_store_mode_switch：1=PLAN 计划存储 / 2=EMERGENCY 应急存储） */
+	UPROPERTY()
+	int32 BatteryStoreMode = 1;
+
+	/** 空调模式（air_conditioner_mode_switch：0=待机 / 1=制冷 / 2=制热 / 3=除湿） */
+	UPROPERTY()
+	int32 AirConditionerState = 0;
+
+	/** 电池保养开启（battery_maintenance_switch） */
+	UPROPERTY()
+	bool bBatteryMaintenance = false;
+
+	/** 链路工作模式（sdr_workmode_switch：0=SDR 仅 SDR / 1=SDR+4G 双链路） */
+	UPROPERTY()
+	int32 LinkWorkmode = 1;
+
+	/** 无人机电源开启（drone_open/close，联动 OSD 子设备在线状态） */
+	UPROPERTY()
+	bool bDronePowerOn = true;
 };

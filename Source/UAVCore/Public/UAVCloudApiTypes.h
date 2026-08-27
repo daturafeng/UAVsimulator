@@ -67,6 +67,28 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kMethodHeartBeat;				// heart_beat（DRC 心跳）
 	UAVCORE_API extern const TCHAR* kMethodDroneEmergencyStop;		// drone_emergency_stop（DRC 急停）
 
+	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
+	UAVCORE_API extern const TCHAR* kMethodDebugModeOpen;				// debug_mode_open（开启调试模式）
+	UAVCORE_API extern const TCHAR* kMethodDebugModeClose;				// debug_mode_close（关闭调试模式）
+	UAVCORE_API extern const TCHAR* kMethodSupplementLightOpen;			// supplement_light_open（开启补光灯）
+	UAVCORE_API extern const TCHAR* kMethodSupplementLightClose;		// supplement_light_close（关闭补光灯）
+	UAVCORE_API extern const TCHAR* kMethodDeviceReboot;				// device_reboot（重启机场）
+	UAVCORE_API extern const TCHAR* kMethodDroneOpen;					// drone_open（无人机上电）
+	UAVCORE_API extern const TCHAR* kMethodDroneClose;					// drone_close（无人机关机）
+	UAVCORE_API extern const TCHAR* kMethodDroneFormat;					// drone_format（格式化无人机数据）
+	UAVCORE_API extern const TCHAR* kMethodDeviceFormat;				// device_format（格式化机场数据）
+	UAVCORE_API extern const TCHAR* kMethodCoverOpen;					// cover_open（打开舱门）
+	UAVCORE_API extern const TCHAR* kMethodCoverClose;					// cover_close（关闭舱门）
+	UAVCORE_API extern const TCHAR* kMethodPutterOpen;					// putter_open（松开推杆）
+	UAVCORE_API extern const TCHAR* kMethodPutterClose;					// putter_close（锁紧推杆）
+	UAVCORE_API extern const TCHAR* kMethodChargeOpen;					// charge_open（开启充电）
+	UAVCORE_API extern const TCHAR* kMethodChargeClose;					// charge_close（关闭充电）
+	UAVCORE_API extern const TCHAR* kMethodBatteryMaintenanceSwitch;	// battery_maintenance_switch（电池保养开关）
+	UAVCORE_API extern const TCHAR* kMethodAlarmStateSwitch;			// alarm_state_switch（声光报警开关）
+	UAVCORE_API extern const TCHAR* kMethodBatteryStoreModeSwitch;		// battery_store_mode_switch（电池存储模式）
+	UAVCORE_API extern const TCHAR* kMethodSdrWorkmodeSwitch;			// sdr_workmode_switch（链路工作模式）
+	UAVCORE_API extern const TCHAR* kMethodAirConditionerModeSwitch;	// air_conditioner_mode_switch（空调模式）
+
 	// ---- 默认设备标识（首期联调口径，与 dock script 一致）----
 	UAVCORE_API extern const TCHAR* kDefaultDockSn;			// DOCK3TEST001
 	UAVCORE_API extern const TCHAR* kDefaultDroneSn;		// 1581F8HGXTEST001

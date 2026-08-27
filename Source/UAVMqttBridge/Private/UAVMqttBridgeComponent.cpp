@@ -81,6 +81,58 @@ namespace
 		}
 		return 9;
 	}
+
+	/**
+	 * 是否为带进度事件的远程调试方法（对齐 dock EventsMethodEnum 的 INBOUND_EVENTS_CONTROL_PROGRESS 通道，排除 DOCK2 专属 eSIM）。
+	 * 命中后发布 RemoteDebugProgress 事件（sent → ok 两段）。
+	 */
+	bool IsProgressDebugMethod(const FString& InMethod)
+	{
+		return InMethod == kMethodDeviceReboot
+			|| InMethod == kMethodDroneOpen
+			|| InMethod == kMethodDroneClose
+			|| InMethod == kMethodDroneFormat
+			|| InMethod == kMethodDeviceFormat
+			|| InMethod == kMethodCoverOpen
+			|| InMethod == kMethodCoverClose
+			|| InMethod == kMethodPutterOpen
+			|| InMethod == kMethodPutterClose
+			|| InMethod == kMethodChargeOpen
+			|| InMethod == kMethodChargeClose;
+	}
+
+	/**
+	 * 远程调试指令 → stepKey（对齐 dock RemoteDebugStepKeyEnum 语义）。
+	 * 无精确枚举语义的方法（device_reboot / drone_close / drone_format / device_format / charge_open）返回空串，进度事件省略 stepKey 字段。
+	 */
+	FString DebugMethodToStepKey(const FString& InMethod)
+	{
+		if (InMethod == kMethodCoverOpen)
+		{
+			return TEXT("open_cover");
+		}
+		if (InMethod == kMethodCoverClose)
+		{
+			return TEXT("close_cover");
+		}
+		if (InMethod == kMethodPutterOpen)
+		{
+			return TEXT("free_putter");
+		}
+		if (InMethod == kMethodPutterClose)
+		{
+			return TEXT("close_putter");
+		}
+		if (InMethod == kMethodChargeClose)
+		{
+			return TEXT("stop_charge");
+		}
+		if (InMethod == kMethodDroneOpen)
+		{
+			return TEXT("open_drone");
+		}
+		return FString();
+	}
 }
 
 UUAVMqttBridgeComponent::UUAVMqttBridgeComponent()
@@ -360,6 +412,31 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 	{
 		Result = FlightControl->HandleCommand(Method, DataJson);
 	}
+	else if (IsRemoteDebugMethod(Method))
+	{
+		// 远程调试/设备控制指令：纯状态模拟，成功回执 output.status="sent"（对齐 RemoteDebugResponse）
+		Result = HandleDebugCommand(Method, DataJson);
+		if (Result == UAV::FlightControlResult::Success)
+		{
+			const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+			Output->SetStringField(TEXT("status"), TEXT("sent"));
+			PublishServicesReply(Method, Tid, Bid, Result, InSn, Output);
+
+			// 带进度方法：同步发布 sent → ok 两段进度事件（method 与 services method 同名；无精确语义的方法缺省 stepKey）
+			if (IsProgressDebugMethod(Method))
+			{
+				const FString StepKey = DebugMethodToStepKey(Method);
+				PublishEvent(Method, BuildRemoteDebugProgressEventData(TEXT("sent"), 0, 1, 1, StepKey, 0));
+				PublishEvent(Method, BuildRemoteDebugProgressEventData(TEXT("ok"), 100, 1, 1, StepKey, 0));
+			}
+		}
+		else
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
 	else if (bIsFlightCommand && FlightControl)
 	{
 		Result = FlightControl->HandleCommand(Method, DataJson);
@@ -429,13 +506,13 @@ void UUAVMqttBridgeComponent::DispatchDrcMessage(const FString& InPayloadJson, c
 	PublishDrcUpReply(Method, Tid, Bid, Result, InSn);
 }
 
-void UUAVMqttBridgeComponent::PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn)
+void UUAVMqttBridgeComponent::PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn, const TSharedPtr<FJsonObject>& InOutput)
 {
 	if (!MqttClient || !bConnected)
 	{
 		return;
 	}
-	const TSharedRef<FJsonObject> Reply = MakeServicesReply(InMethod, InTid, InBid, InResult);
+	const TSharedRef<FJsonObject> Reply = MakeServicesReply(InMethod, InTid, InBid, InResult, InOutput);
 	const FString TargetSn = InSn.IsEmpty() ? DockSn : InSn;
 	const FString Topic = MakeTopic(kTopicServicesReplyTemplate, TargetSn);
 	const FString Json = SerializeJson(Reply);
@@ -1127,6 +1204,199 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDrcStatusNotifyData(int32 
 	return Data;
 }
 
+bool UUAVMqttBridgeComponent::IsRemoteDebugMethod(const FString& InMethod)
+{
+	// 精确匹配 20 个远程调试/设备控制 method（对齐 dock DebugMethodEnum，排除 DOCK2 专属 eSIM 指令）。
+	// 使用 TSet 精确匹配：drone_open 等 method 无统一前缀，不能用 StartsWith 分支。
+	static const TSet<FString> RemoteDebugMethods = {
+		kMethodDebugModeOpen,
+		kMethodDebugModeClose,
+		kMethodSupplementLightOpen,
+		kMethodSupplementLightClose,
+		kMethodDeviceReboot,
+		kMethodDroneOpen,
+		kMethodDroneClose,
+		kMethodDroneFormat,
+		kMethodDeviceFormat,
+		kMethodCoverOpen,
+		kMethodCoverClose,
+		kMethodPutterOpen,
+		kMethodPutterClose,
+		kMethodChargeOpen,
+		kMethodChargeClose,
+		kMethodBatteryMaintenanceSwitch,
+		kMethodAlarmStateSwitch,
+		kMethodBatteryStoreModeSwitch,
+		kMethodSdrWorkmodeSwitch,
+		kMethodAirConditionerModeSwitch,
+	};
+	return RemoteDebugMethods.Contains(InMethod);
+}
+
+int32 UUAVMqttBridgeComponent::HandleDebugCommand(const FString& InMethod, const FString& InDataJson)
+{
+	using namespace UAV::FlightControlResult;
+
+	// 未知方法：统一按未知指令处理（非 20 个调试 method 集合内）
+	if (!IsRemoteDebugMethod(InMethod))
+	{
+		return UnknownMethod;
+	}
+
+	// 解析 data（带参指令校验用；无参指令无需 data）
+	TSharedPtr<FJsonObject> Data;
+	if (!InDataJson.IsEmpty())
+	{
+		if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+		{
+			return InvalidParams;
+		}
+	}
+
+	// 读取常见参数（缺省 -1 用于越界判定）
+	int32 Action = -1;
+	int32 ParsedLinkWorkmode = -1;
+	if (Data.IsValid())
+	{
+		if (Data->HasField(TEXT("action")))
+		{
+			Action = static_cast<int32>(Data->GetNumberField(TEXT("action")));
+		}
+		if (Data->HasField(TEXT("linkWorkmode")))
+		{
+			ParsedLinkWorkmode = static_cast<int32>(Data->GetNumberField(TEXT("linkWorkmode")));
+		}
+	}
+
+	// 带参指令按 dock 枚举校验：缺失或越界 → InvalidParams(7)
+	if (InMethod == kMethodBatteryMaintenanceSwitch || InMethod == kMethodAlarmStateSwitch)
+	{
+		if (Action != 0 && Action != 1)
+		{
+			return InvalidParams;
+		}
+	}
+	else if (InMethod == kMethodBatteryStoreModeSwitch)
+	{
+		if (Action != 1 && Action != 2)
+		{
+			return InvalidParams;
+		}
+	}
+	else if (InMethod == kMethodSdrWorkmodeSwitch)
+	{
+		if (ParsedLinkWorkmode != 0 && ParsedLinkWorkmode != 1)
+		{
+			return InvalidParams;
+		}
+	}
+	else if (InMethod == kMethodAirConditionerModeSwitch)
+	{
+		if (Action < 0 || Action > 3)
+		{
+			return InvalidParams;
+		}
+	}
+
+	// 更新机场设备模拟状态（纯状态模拟，无物理联动）
+	if (InMethod == kMethodDebugModeOpen)
+	{
+		bDebugMode = true;
+	}
+	else if (InMethod == kMethodDebugModeClose)
+	{
+		bDebugMode = false;
+	}
+	else if (InMethod == kMethodSupplementLightOpen)
+	{
+		bSupplementLight = true;
+	}
+	else if (InMethod == kMethodSupplementLightClose)
+	{
+		bSupplementLight = false;
+	}
+	else if (InMethod == kMethodDroneOpen)
+	{
+		bDronePowerOn = true;
+	}
+	else if (InMethod == kMethodDroneClose)
+	{
+		bDronePowerOn = false;
+	}
+	else if (InMethod == kMethodCoverOpen)
+	{
+		bCoverOverride = true;
+		bCoverOpen = true;
+	}
+	else if (InMethod == kMethodCoverClose)
+	{
+		bCoverOverride = true;
+		bCoverOpen = false;
+	}
+	else if (InMethod == kMethodPutterOpen)
+	{
+		bPutterOpen = true;
+	}
+	else if (InMethod == kMethodPutterClose)
+	{
+		bPutterOpen = false;
+	}
+	else if (InMethod == kMethodChargeOpen)
+	{
+		bChargeOverride = true;
+		bChargeOpen = true;
+	}
+	else if (InMethod == kMethodChargeClose)
+	{
+		bChargeOverride = true;
+		bChargeOpen = false;
+	}
+	else if (InMethod == kMethodBatteryMaintenanceSwitch)
+	{
+		bBatteryMaintenance = (Action == 1);
+	}
+	else if (InMethod == kMethodAlarmStateSwitch)
+	{
+		bAlarmState = (Action == 1);
+	}
+	else if (InMethod == kMethodBatteryStoreModeSwitch)
+	{
+		BatteryStoreMode = Action;
+	}
+	else if (InMethod == kMethodSdrWorkmodeSwitch)
+	{
+		LinkWorkmode = ParsedLinkWorkmode;
+	}
+	else if (InMethod == kMethodAirConditionerModeSwitch)
+	{
+		AirConditionerState = Action;
+	}
+	// device_reboot / drone_format / device_format：无状态变化，仅成功回执与进度事件
+
+	return Success;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildRemoteDebugProgressEventData(const FString& InStatus, int32 InPercent, int32 InCurrentStep, int32 InTotalSteps, const FString& InStepKey, int32 InStepResult) const
+{
+	// 对齐 dock EventsDataRequest<RemoteDebugProgress>：data={result:0, output:{status, progress:{percent, currentStep, totalSteps, stepKey?, stepResult}}}
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), 0);
+	const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+	Output->SetStringField(TEXT("status"), InStatus);
+	const TSharedRef<FJsonObject> Progress = MakeShared<FJsonObject>();
+	Progress->SetNumberField(TEXT("percent"), InPercent);
+	Progress->SetNumberField(TEXT("currentStep"), InCurrentStep);
+	Progress->SetNumberField(TEXT("totalSteps"), InTotalSteps);
+	if (!InStepKey.IsEmpty())
+	{
+		Progress->SetStringField(TEXT("stepKey"), InStepKey);
+	}
+	Progress->SetNumberField(TEXT("stepResult"), InStepResult);
+	Output->SetObjectField(TEXT("progress"), Progress);
+	Data->SetObjectField(TEXT("output"), Output);
+	return Data;
+}
+
 TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
 {
 	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
@@ -1143,14 +1413,17 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
 	const FUAVGeoCoordinate Airport = DroneSim->AirportOrigin;
 
 	Data->SetStringField(TEXT("sn"), DockSn);
-	Data->SetNumberField(TEXT("mode_code"), IsDockInMission() ? 4 : 3);
+	// 调试模式激活输出 REMOTE_DEBUGGING=2，否则沿用 WORKING=4 / IDLE=3 推导
+	Data->SetNumberField(TEXT("mode_code"), bDebugMode ? 2 : (IsDockInMission() ? 4 : 3));
 	Data->SetBoolField(TEXT("drone_in_dock"), bInDock);
-	Data->SetNumberField(TEXT("cover_state"), bInDock ? 0 : 1);
+	// 舱门状态：指令覆盖优先（cover_open=1 / cover_close=0），未覆盖回退归巢推导
+	Data->SetNumberField(TEXT("cover_state"), bCoverOverride ? (bCoverOpen ? 1 : 0) : (bInDock ? 0 : 1));
 	{
 		// 充电状态：归巢待命且电量未满为充电中（dock 口径）
 		const TSharedRef<FJsonObject> Charge = MakeShared<FJsonObject>();
 		Charge->SetNumberField(TEXT("capacity_percent"), CapacityPercent);
-		Charge->SetNumberField(TEXT("state"), bCharging ? 1 : 0);
+		// 充电状态：指令覆盖优先（charge_open=1 / charge_close=0），未覆盖回退电量推导
+		Charge->SetNumberField(TEXT("state"), bChargeOverride ? (bChargeOpen ? 1 : 0) : (bCharging ? 1 : 0));
 		Data->SetObjectField(TEXT("drone_charge_state"), Charge);
 	}
 	Data->SetNumberField(TEXT("flighttask_step_code"), GetFlightTaskStepCode());
@@ -1205,17 +1478,17 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
 		Storage->SetNumberField(TEXT("used"), FMath::Min(512.0 * 1024.0, 64000.0 + DroneSim->GetRecordingTimeSeconds() * 4.2));
 		Data->SetObjectField(TEXT("storage"), Storage);
 	}
-	Data->SetBoolField(TEXT("supplement_light_state"), false);
+	Data->SetBoolField(TEXT("supplement_light_state"), bSupplementLight);
 	Data->SetBoolField(TEXT("emergency_stop_state"), false);
 	{
 		const TSharedRef<FJsonObject> AirConditioner = MakeShared<FJsonObject>();
-		AirConditioner->SetNumberField(TEXT("air_conditioner_state"), 0);
+		AirConditioner->SetNumberField(TEXT("air_conditioner_state"), AirConditionerState);
 		AirConditioner->SetNumberField(TEXT("switch_time"), 0);
 		Data->SetObjectField(TEXT("air_conditioner"), AirConditioner);
 	}
-	Data->SetNumberField(TEXT("battery_store_mode"), 1);
-	Data->SetBoolField(TEXT("alarm_state"), false);
-	Data->SetNumberField(TEXT("putter_state"), 0);
+	Data->SetNumberField(TEXT("battery_store_mode"), BatteryStoreMode);
+	Data->SetBoolField(TEXT("alarm_state"), bAlarmState);
+	Data->SetNumberField(TEXT("putter_state"), bPutterOpen ? 1 : 0);
 	Data->SetNumberField(TEXT("electric_supply_voltage"), 220);
 	Data->SetNumberField(TEXT("working_voltage"), 24);
 	Data->SetNumberField(TEXT("working_current"), 3);
@@ -1228,7 +1501,7 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
 	}
 	{
 		const TSharedRef<FJsonObject> Maintenance = MakeShared<FJsonObject>();
-		Maintenance->SetNumberField(TEXT("maintenance_state"), 0);
+		Maintenance->SetNumberField(TEXT("maintenance_state"), bBatteryMaintenance ? 1 : 0);
 		Maintenance->SetNumberField(TEXT("maintenance_time_left"), 23);
 		Maintenance->SetNumberField(TEXT("heat_state"), 0);
 		Data->SetObjectField(TEXT("drone_battery_maintenance_info"), Maintenance);
@@ -1243,7 +1516,8 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
 		const TSharedRef<FJsonObject> SubDevice = MakeShared<FJsonObject>();
 		SubDevice->SetStringField(TEXT("device_sn"), DroneSn);
 		SubDevice->SetStringField(TEXT("device_model_key"), TEXT("0-100-0"));
-		SubDevice->SetNumberField(TEXT("device_online_status"), 1);
+		// 子设备在线状态：无人机电源开启为在线，否则离线
+		SubDevice->SetNumberField(TEXT("device_online_status"), bDronePowerOn ? 1 : 0);
 		SubDevice->SetNumberField(TEXT("device_paired"), 1);
 		Data->SetObjectField(TEXT("sub_device"), SubDevice);
 	}
@@ -1264,7 +1538,7 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
 		Link->SetNumberField(TEXT("4g_quality"), 5);
 		Link->SetNumberField(TEXT("4g_uav_quality"), 5);
 		Link->SetNumberField(TEXT("dongle_number"), 1);
-		Link->SetNumberField(TEXT("link_workmode"), 1);
+		Link->SetNumberField(TEXT("link_workmode"), LinkWorkmode);
 		Link->SetNumberField(TEXT("sdr_freq_band"), 5.8);
 		Link->SetNumberField(TEXT("sdr_link_state"), 1);
 		Link->SetNumberField(TEXT("sdr_quality"), 5);

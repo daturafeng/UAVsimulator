@@ -63,6 +63,28 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodHeartBeat = TEXT("heart_beat");
 	const TCHAR* kMethodDroneEmergencyStop = TEXT("drone_emergency_stop");
 
+	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
+	const TCHAR* kMethodDebugModeOpen = TEXT("debug_mode_open");
+	const TCHAR* kMethodDebugModeClose = TEXT("debug_mode_close");
+	const TCHAR* kMethodSupplementLightOpen = TEXT("supplement_light_open");
+	const TCHAR* kMethodSupplementLightClose = TEXT("supplement_light_close");
+	const TCHAR* kMethodDeviceReboot = TEXT("device_reboot");
+	const TCHAR* kMethodDroneOpen = TEXT("drone_open");
+	const TCHAR* kMethodDroneClose = TEXT("drone_close");
+	const TCHAR* kMethodDroneFormat = TEXT("drone_format");
+	const TCHAR* kMethodDeviceFormat = TEXT("device_format");
+	const TCHAR* kMethodCoverOpen = TEXT("cover_open");
+	const TCHAR* kMethodCoverClose = TEXT("cover_close");
+	const TCHAR* kMethodPutterOpen = TEXT("putter_open");
+	const TCHAR* kMethodPutterClose = TEXT("putter_close");
+	const TCHAR* kMethodChargeOpen = TEXT("charge_open");
+	const TCHAR* kMethodChargeClose = TEXT("charge_close");
+	const TCHAR* kMethodBatteryMaintenanceSwitch = TEXT("battery_maintenance_switch");
+	const TCHAR* kMethodAlarmStateSwitch = TEXT("alarm_state_switch");
+	const TCHAR* kMethodBatteryStoreModeSwitch = TEXT("battery_store_mode_switch");
+	const TCHAR* kMethodSdrWorkmodeSwitch = TEXT("sdr_workmode_switch");
+	const TCHAR* kMethodAirConditionerModeSwitch = TEXT("air_conditioner_mode_switch");
+
 	// ---- 默认设备标识（与 dock script/common.py 假设备口径一致）----
 	const TCHAR* kDefaultDockSn = TEXT("DOCK3TEST001");
 	const TCHAR* kDefaultDroneSn = TEXT("1581F8HGXTEST001");
