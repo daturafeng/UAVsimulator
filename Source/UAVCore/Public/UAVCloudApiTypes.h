@@ -40,6 +40,22 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kMethodCameraRecordingStop;		// camera_recording_stop
 	UAVCORE_API extern const TCHAR* kMethodCameraAim;				// camera_aim
 	UAVCORE_API extern const TCHAR* kMethodGimbalReset;				// gimbal_reset
+	UAVCORE_API extern const TCHAR* kMethodCameraLookAt;			// camera_look_at
+	UAVCORE_API extern const TCHAR* kMethodCameraScreenSplit;		// camera_screen_split
+	UAVCORE_API extern const TCHAR* kMethodPhotoStorageSet;			// photo_storage_set
+	UAVCORE_API extern const TCHAR* kMethodVideoStorageSet;			// video_storage_set
+	UAVCORE_API extern const TCHAR* kMethodCameraExposureSet;		// camera_exposure_set
+	UAVCORE_API extern const TCHAR* kMethodCameraExposureModeSet;	// camera_exposure_mode_set
+	UAVCORE_API extern const TCHAR* kMethodCameraFocusModeSet;		// camera_focus_mode_set
+	UAVCORE_API extern const TCHAR* kMethodCameraFocusValueSet;		// camera_focus_value_set
+	UAVCORE_API extern const TCHAR* kMethodIrMeteringModeSet;		// ir_metering_mode_set
+	UAVCORE_API extern const TCHAR* kMethodIrMeteringPointSet;		// ir_metering_point_set
+	UAVCORE_API extern const TCHAR* kMethodIrMeteringAreaSet;		// ir_metering_area_set
+	UAVCORE_API extern const TCHAR* kMethodCameraPointFocusAction;	// camera_point_focus_action
+	UAVCORE_API extern const TCHAR* kMethodCameraFocalLengthSet;	// camera_focal_length_set
+	UAVCORE_API extern const TCHAR* kMethodPoiModeEnter;			// poi_mode_enter
+	UAVCORE_API extern const TCHAR* kMethodPoiModeExit;				// poi_mode_exit
+	UAVCORE_API extern const TCHAR* kMethodPoiCircleSpeedSet;		// poi_circle_speed_set
 
 	// ---- 默认设备标识（首期联调口径，与 dock script 一致）----
 	UAVCORE_API extern const TCHAR* kDefaultDockSn;			// DOCK3TEST001

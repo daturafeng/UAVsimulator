@@ -186,7 +186,23 @@ int32 UUAVCameraStreamComponent::HandleCommand(const FString& InMethod, const FS
 		|| Method == kMethodCameraRecordingStart
 		|| Method == kMethodCameraRecordingStop
 		|| Method == kMethodCameraAim
-		|| Method == kMethodGimbalReset)
+		|| Method == kMethodGimbalReset
+		|| Method == kMethodCameraLookAt
+		|| Method == kMethodCameraScreenSplit
+		|| Method == kMethodPhotoStorageSet
+		|| Method == kMethodVideoStorageSet
+		|| Method == kMethodCameraExposureSet
+		|| Method == kMethodCameraExposureModeSet
+		|| Method == kMethodCameraFocusModeSet
+		|| Method == kMethodCameraFocusValueSet
+		|| Method == kMethodIrMeteringModeSet
+		|| Method == kMethodIrMeteringPointSet
+		|| Method == kMethodIrMeteringAreaSet
+		|| Method == kMethodCameraPointFocusAction
+		|| Method == kMethodCameraFocalLengthSet
+		|| Method == kMethodPoiModeEnter
+		|| Method == kMethodPoiModeExit
+		|| Method == kMethodPoiCircleSpeedSet)
 	{
 		if (!DroneSim)
 		{
@@ -229,6 +245,70 @@ int32 UUAVCameraStreamComponent::HandleCommand(const FString& InMethod, const FS
 		else if (Method == kMethodGimbalReset)
 		{
 			Result = HandleGimbalReset(Data);
+		}
+		else if (Method == kMethodCameraLookAt)
+		{
+			Result = HandleCameraLookAt(Data);
+		}
+		else if (Method == kMethodCameraScreenSplit)
+		{
+			Result = HandleCameraScreenSplit(Data);
+		}
+		else if (Method == kMethodPhotoStorageSet)
+		{
+			Result = HandlePhotoStorageSet(Data);
+		}
+		else if (Method == kMethodVideoStorageSet)
+		{
+			Result = HandleVideoStorageSet(Data);
+		}
+		else if (Method == kMethodCameraExposureSet)
+		{
+			Result = HandleCameraExposureSet(Data);
+		}
+		else if (Method == kMethodCameraExposureModeSet)
+		{
+			Result = HandleCameraExposureModeSet(Data);
+		}
+		else if (Method == kMethodCameraFocusModeSet)
+		{
+			Result = HandleCameraFocusModeSet(Data);
+		}
+		else if (Method == kMethodCameraFocusValueSet)
+		{
+			Result = HandleCameraFocusValueSet(Data);
+		}
+		else if (Method == kMethodIrMeteringModeSet)
+		{
+			Result = HandleIrMeteringModeSet(Data);
+		}
+		else if (Method == kMethodIrMeteringPointSet)
+		{
+			Result = HandleIrMeteringPointSet(Data);
+		}
+		else if (Method == kMethodIrMeteringAreaSet)
+		{
+			Result = HandleIrMeteringAreaSet(Data);
+		}
+		else if (Method == kMethodCameraPointFocusAction)
+		{
+			Result = HandleCameraPointFocusAction(Data);
+		}
+		else if (Method == kMethodCameraFocalLengthSet)
+		{
+			Result = HandleCameraFocalLengthSet(Data);
+		}
+		else if (Method == kMethodPoiModeEnter)
+		{
+			Result = HandlePoiModeEnter(Data);
+		}
+		else if (Method == kMethodPoiModeExit)
+		{
+			Result = HandlePoiModeExit(Data);
+		}
+		else if (Method == kMethodPoiCircleSpeedSet)
+		{
+			Result = HandlePoiCircleSpeedSet(Data);
 		}
 	}
 
@@ -471,6 +551,157 @@ int32 UUAVCameraStreamComponent::HandleGimbalReset(const TSharedPtr<FJsonObject>
 {
 	DroneSim->ResetGimbalTarget();
 	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 云台复位"));
+	return kResultSuccess;
+}
+
+// ---- 相机设置指令处理 ----
+
+int32 UUAVCameraStreamComponent::HandleCameraLookAt(const TSharedPtr<FJsonObject>& InData)
+{
+	FUAVGeoCoordinate Target;
+	Target.Longitude = ReadNumber(InData, TEXT("longitude"));
+	Target.Latitude = ReadNumber(InData, TEXT("latitude"));
+	Target.Altitude = ReadNumber(InData, TEXT("height"));
+	DroneSim->SetLookAtTarget(Target);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 看点：lng=%.6f lat=%.6f h=%.1f"),
+		Target.Longitude, Target.Latitude, Target.Altitude);
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraScreenSplit(const TSharedPtr<FJsonObject>& InData)
+{
+	const bool bEnable = InData.IsValid() && InData->GetBoolField(TEXT("enable_screen_split"));
+	DroneSim->SetScreenSplitEnabled(bEnable);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 分屏：%s"), bEnable ? TEXT("开") : TEXT("关"));
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandlePhotoStorageSet(const TSharedPtr<FJsonObject>& InData)
+{
+	FString Location;
+	if (InData.IsValid())
+	{
+		Location = InData->GetStringField(TEXT("storage_location"));
+	}
+	DroneSim->SetPhotoStorageLocation(Location);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 照片存储位置：%s"), *DroneSim->GetPhotoStorageLocation());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleVideoStorageSet(const TSharedPtr<FJsonObject>& InData)
+{
+	FString Location;
+	if (InData.IsValid())
+	{
+		Location = InData->GetStringField(TEXT("storage_location"));
+	}
+	DroneSim->SetVideoStorageLocation(Location);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 录像存储位置：%s"), *DroneSim->GetVideoStorageLocation());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraExposureSet(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->SetShutterSpeed(ReadNumber(InData, TEXT("shutter_speed"), DroneSim->GetShutterSpeed()));
+	DroneSim->SetIso(static_cast<int32>(ReadNumber(InData, TEXT("iso"), DroneSim->GetIso())));
+	DroneSim->SetExposureCompensation(ReadNumber(InData, TEXT("exposure_compensation"), DroneSim->GetExposureCompensation()));
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 曝光：快门=%.6f ISO=%d 补偿=%.1f"),
+		DroneSim->GetShutterSpeed(), DroneSim->GetIso(), DroneSim->GetExposureCompensation());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraExposureModeSet(const TSharedPtr<FJsonObject>& InData)
+{
+	const int32 Mode = static_cast<int32>(ReadNumber(InData, TEXT("exposure_mode")));
+	DroneSim->SetExposureMode(Mode);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 曝光模式：%d"), DroneSim->GetExposureMode());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraFocusModeSet(const TSharedPtr<FJsonObject>& InData)
+{
+	const int32 Mode = static_cast<int32>(ReadNumber(InData, TEXT("focus_mode")));
+	DroneSim->SetFocusMode(Mode);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 对焦模式：%d"), DroneSim->GetFocusMode());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraFocusValueSet(const TSharedPtr<FJsonObject>& InData)
+{
+	const int32 Value = static_cast<int32>(ReadNumber(InData, TEXT("focus_value")));
+	DroneSim->SetFocusValue(Value);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 对焦值：%d"), DroneSim->GetFocusValue());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleIrMeteringModeSet(const TSharedPtr<FJsonObject>& InData)
+{
+	const int32 Mode = static_cast<int32>(ReadNumber(InData, TEXT("ir_metering_mode")));
+	DroneSim->SetIrMeteringMode(Mode);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 红外测光模式：%d"), DroneSim->GetIrMeteringMode());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleIrMeteringPointSet(const TSharedPtr<FJsonObject>& InData)
+{
+	const double X = ReadNumber(InData, TEXT("ir_metering_point_x"), 0.5);
+	const double Y = ReadNumber(InData, TEXT("ir_metering_point_y"), 0.5);
+	DroneSim->SetIrMeteringPoint(X, Y);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 红外测光点：x=%.3f y=%.3f"), X, Y);
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleIrMeteringAreaSet(const TSharedPtr<FJsonObject>& InData)
+{
+	const double X = ReadNumber(InData, TEXT("ir_metering_area_x"), 0.5);
+	const double Y = ReadNumber(InData, TEXT("ir_metering_area_y"), 0.5);
+	const double W = ReadNumber(InData, TEXT("ir_metering_area_w"), 0.2);
+	const double H = ReadNumber(InData, TEXT("ir_metering_area_h"), 0.2);
+	DroneSim->SetIrMeteringArea(X, Y, W, H);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 红外测光区域：x=%.3f y=%.3f w=%.3f h=%.3f"), X, Y, W, H);
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraPointFocusAction(const TSharedPtr<FJsonObject>& InData)
+{
+	FString Action;
+	if (InData.IsValid())
+	{
+		Action = InData->GetStringField(TEXT("point_focus_action"));
+	}
+	DroneSim->SetPointFocusAction(Action);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 点对焦动作：%s"), *Action);
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraFocalLengthSet(const TSharedPtr<FJsonObject>& InData)
+{
+	const double FocalLength = ReadNumber(InData, TEXT("focal_length"));
+	DroneSim->SetFocalLength(FocalLength);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 焦距：%.1f mm"), DroneSim->GetFocalLength());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandlePoiModeEnter(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->SetPoiModeActive(true);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 进入 POI 环绕模式"));
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandlePoiModeExit(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->SetPoiModeActive(false);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 退出 POI 环绕模式"));
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandlePoiCircleSpeedSet(const TSharedPtr<FJsonObject>& InData)
+{
+	const double MaxSpeed = ReadNumber(InData, TEXT("max_speed"), 5.0);
+	const double YawRate = ReadNumber(InData, TEXT("gimbal_yaw_rate"), 30.0);
+	DroneSim->SetPoiCircleSpeed(MaxSpeed, YawRate);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] POI 环绕速度：max=%.1f yaw_rate=%.1f"), MaxSpeed, YawRate);
 	return kResultSuccess;
 }
 

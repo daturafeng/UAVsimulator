@@ -240,6 +240,133 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
 	void SetZoomFactor(double NewZoomFactor);
 
+	// ---- 相机设置状态（曝光/对焦/测光/存储/分屏/焦距/看点/POI） ----
+	/** 曝光模式（0 自动 / 1 手动 / 2 快门优先 / 3 光圈优先，对齐上云 API exposure_mode） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	int32 GetExposureMode() const { return ExposureMode; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetExposureMode(int32 NewMode);
+
+	/** 快门速度（秒，如 1/1000） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetShutterSpeed() const { return ShutterSpeed; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetShutterSpeed(double NewShutterSpeed);
+
+	/** ISO 感光度 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	int32 GetIso() const { return Iso; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetIso(int32 NewIso);
+
+	/** 曝光补偿（EV，如 -2.0 ~ 2.0） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetExposureCompensation() const { return ExposureCompensation; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetExposureCompensation(double NewCompensation);
+
+	/** 对焦模式（0 手动 / 1 单次自动 / 2 连续自动，对齐 focus_mode） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	int32 GetFocusMode() const { return FocusMode; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetFocusMode(int32 NewMode);
+
+	/** 对焦值（0-100，手动对焦位置） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	int32 GetFocusValue() const { return FocusValue; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetFocusValue(int32 NewValue);
+
+	/** 点对焦动作（point_focus_start / point_focus_stop，仅记录最近动作） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	FString GetPointFocusAction() const { return PointFocusAction; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetPointFocusAction(const FString& InAction);
+
+	/** 红外测光模式（0 全局 / 1 点测光 / 2 区域测光） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	int32 GetIrMeteringMode() const { return IrMeteringMode; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetIrMeteringMode(int32 NewMode);
+
+	/** 红外测光点（归一化坐标 0-1） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	void GetIrMeteringPoint(double& OutX, double& OutY) const { OutX = IrMeteringPointX; OutY = IrMeteringPointY; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetIrMeteringPoint(double InX, double InY);
+
+	/** 红外测光区域（归一化坐标：中心 x/y、宽高 w/h） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	void GetIrMeteringArea(double& OutX, double& OutY, double& OutW, double& OutH) const { OutX = IrMeteringAreaX; OutY = IrMeteringAreaY; OutW = IrMeteringAreaW; OutH = IrMeteringAreaH; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetIrMeteringArea(double InX, double InY, double InW, double InH);
+
+	/** 照片存储位置（如 current / sd_card，OSD 数组首元素） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	FString GetPhotoStorageLocation() const { return PhotoStorageLocation; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetPhotoStorageLocation(const FString& InLocation);
+
+	/** 录像存储位置 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	FString GetVideoStorageLocation() const { return VideoStorageLocation; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetVideoStorageLocation(const FString& InLocation);
+
+	/** 分屏使能（camera_screen_split 指令设置，OSD screen_split_enable） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	bool IsScreenSplitEnabled() const { return bScreenSplitEnabled; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetScreenSplitEnabled(bool bInEnabled) { bScreenSplitEnabled = bInEnabled; }
+
+	/** 焦距（毫米，等效 35mm） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetFocalLength() const { return FocalLength; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetFocalLength(double NewFocalLength);
+
+	/** 看点目标（camera_look_at 经纬度/海拔）；未设置返回 false */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	bool GetLookAtTarget(FUAVGeoCoordinate& OutTarget) const;
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetLookAtTarget(const FUAVGeoCoordinate& InTarget);
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void ClearLookAtTarget();
+
+	/** POI 环绕模式是否激活（poi_mode_enter 后为 true，不驱动飞行物理） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	bool IsPoiModeActive() const { return bPoiModeActive; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetPoiModeActive(bool bInActive) { bPoiModeActive = bInActive; }
+
+	/** POI 环绕最大速度（米/秒） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetPoiMaxSpeed() const { return PoiMaxSpeed; }
+
+	/** POI 环绕云台偏航角速度（度/秒） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetPoiGimbalYawRate() const { return PoiGimbalYawRate; }
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetPoiCircleSpeed(double InMaxSpeed, double InGimbalYawRate);
+
 	/** 是否拍照中 */
 	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
 	bool IsPhotoTaking() const { return bPhotoTaking; }
@@ -468,6 +595,94 @@ private:
 	/** 是否已抢占载荷权 */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
 	bool bHasPayloadAuthority = false;
+
+	/** 曝光模式（0 自动 / 1 手动 / 2 快门优先 / 3 光圈优先） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	int32 ExposureMode = 0;
+
+	/** 快门速度（秒） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double ShutterSpeed = 1.0 / 1000.0;
+
+	/** ISO 感光度 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	int32 Iso = 100;
+
+	/** 曝光补偿（EV） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double ExposureCompensation = 0.0;
+
+	/** 对焦模式（0 手动 / 1 单次自动 / 2 连续自动） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	int32 FocusMode = 0;
+
+	/** 对焦值（0-100） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	int32 FocusValue = 0;
+
+	/** 最近点对焦动作（point_focus_start / point_focus_stop） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	FString PointFocusAction;
+
+	/** 红外测光模式（0 全局 / 1 点测光 / 2 区域测光） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	int32 IrMeteringMode = 0;
+
+	/** 红外测光点（归一化 0-1） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double IrMeteringPointX = 0.5;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double IrMeteringPointY = 0.5;
+
+	/** 红外测光区域（归一化：中心 x/y、宽 w、高 h） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double IrMeteringAreaX = 0.5;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double IrMeteringAreaY = 0.5;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double IrMeteringAreaW = 0.2;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double IrMeteringAreaH = 0.2;
+
+	/** 照片存储位置（current / sd_card 等） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	FString PhotoStorageLocation = TEXT("current");
+
+	/** 录像存储位置 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	FString VideoStorageLocation = TEXT("current");
+
+	/** 分屏使能（OSD screen_split_enable） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	bool bScreenSplitEnabled = false;
+
+	/** 焦距（毫米） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double FocalLength = 24.0;
+
+	/** 看点目标是否已设置 */
+	UPROPERTY()
+	bool bHasLookAtTarget = false;
+
+	/** 看点目标（经纬度/海拔） */
+	UPROPERTY()
+	FUAVGeoCoordinate LookAtTarget;
+
+	/** POI 环绕模式激活 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	bool bPoiModeActive = false;
+
+	/** POI 环绕最大速度（米/秒） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double PoiMaxSpeed = 5.0;
+
+	/** POI 环绕云台偏航角速度（度/秒） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double PoiGimbalYawRate = 30.0;
 
 	/** 累计飞行距离（米） */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))

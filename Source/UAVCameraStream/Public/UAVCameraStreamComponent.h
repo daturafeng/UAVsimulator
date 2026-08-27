@@ -152,6 +152,24 @@ protected:
 	int32 HandleCameraAim(const TSharedPtr<FJsonObject>& InData);
 	int32 HandleGimbalReset(const TSharedPtr<FJsonObject>& InData);
 
+	// ---- 相机设置指令处理 ----
+	int32 HandleCameraLookAt(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraScreenSplit(const TSharedPtr<FJsonObject>& InData);
+	int32 HandlePhotoStorageSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleVideoStorageSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraExposureSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraExposureModeSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraFocusModeSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraFocusValueSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleIrMeteringModeSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleIrMeteringPointSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleIrMeteringAreaSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraPointFocusAction(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraFocalLengthSet(const TSharedPtr<FJsonObject>& InData);
+	int32 HandlePoiModeEnter(const TSharedPtr<FJsonObject>& InData);
+	int32 HandlePoiModeExit(const TSharedPtr<FJsonObject>& InData);
+	int32 HandlePoiCircleSpeedSet(const TSharedPtr<FJsonObject>& InData);
+
 	/** 查找会话（非 const 版本） */
 	FUAVLiveSession* FindSession(const FString& InVideoId);
 

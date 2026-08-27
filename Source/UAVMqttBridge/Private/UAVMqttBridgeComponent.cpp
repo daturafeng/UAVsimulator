@@ -286,7 +286,9 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 		|| Method.StartsWith(TEXT("return_home"));
 	const bool bIsLiveCommand = Method.StartsWith(TEXT("live_"));
 	const bool bIsPayloadCommand = Method.StartsWith(TEXT("camera_")) || Method.StartsWith(TEXT("payload_"))
-		|| Method.StartsWith(TEXT("gimbal_"));
+		|| Method.StartsWith(TEXT("gimbal_")) || Method.StartsWith(TEXT("photo_storage_"))
+		|| Method.StartsWith(TEXT("video_storage_")) || Method.StartsWith(TEXT("ir_metering_"))
+		|| Method.StartsWith(TEXT("poi_"));
 
 	if (bIsFlightCommand && FlightControl)
 	{
@@ -594,14 +596,14 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDroneOsdPayload() const
 	Camera->SetNumberField(TEXT("remain_photo_num"), DroneSim->GetRemainingPhotoNum());
 	Camera->SetNumberField(TEXT("remain_record_duration"), FMath::Max(0.0, 5400.0 - DroneSim->GetRecordingTimeSeconds()));
 	Camera->SetNumberField(TEXT("record_time"), DroneSim->GetRecordingTimeSeconds());
-	Camera->SetNumberField(TEXT("zoom_focus_mode"), 0);
-	Camera->SetNumberField(TEXT("zoom_focus_value"), 0);
+	Camera->SetNumberField(TEXT("zoom_focus_mode"), DroneSim->GetFocusMode());
+	Camera->SetNumberField(TEXT("zoom_focus_value"), DroneSim->GetFocusValue());
 	Camera->SetNumberField(TEXT("zoom_max_focus_value"), 100);
 	Camera->SetNumberField(TEXT("zoom_min_focus_value"), 0);
 	Camera->SetNumberField(TEXT("zoom_focus_state"), 0);
-	Camera->SetBoolField(TEXT("screen_split_enable"), false);
-	Camera->SetArrayField(TEXT("photo_storage_settings"), { MakeShared<FJsonValueString>(TEXT("current")) });
-	Camera->SetArrayField(TEXT("video_storage_settings"), { MakeShared<FJsonValueString>(TEXT("current")) });
+	Camera->SetBoolField(TEXT("screen_split_enable"), DroneSim->IsScreenSplitEnabled());
+	Camera->SetArrayField(TEXT("photo_storage_settings"), { MakeShared<FJsonValueString>(DroneSim->GetPhotoStorageLocation()) });
+	Camera->SetArrayField(TEXT("video_storage_settings"), { MakeShared<FJsonValueString>(DroneSim->GetVideoStorageLocation()) });
 	{
 		const TSharedRef<FJsonObject> Region = MakeShared<FJsonObject>();
 		Region->SetNumberField(TEXT("left"), 0.0);

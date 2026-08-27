@@ -36,6 +36,22 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodCameraRecordingStop = TEXT("camera_recording_stop");
 	const TCHAR* kMethodCameraAim = TEXT("camera_aim");
 	const TCHAR* kMethodGimbalReset = TEXT("gimbal_reset");
+	const TCHAR* kMethodCameraLookAt = TEXT("camera_look_at");
+	const TCHAR* kMethodCameraScreenSplit = TEXT("camera_screen_split");
+	const TCHAR* kMethodPhotoStorageSet = TEXT("photo_storage_set");
+	const TCHAR* kMethodVideoStorageSet = TEXT("video_storage_set");
+	const TCHAR* kMethodCameraExposureSet = TEXT("camera_exposure_set");
+	const TCHAR* kMethodCameraExposureModeSet = TEXT("camera_exposure_mode_set");
+	const TCHAR* kMethodCameraFocusModeSet = TEXT("camera_focus_mode_set");
+	const TCHAR* kMethodCameraFocusValueSet = TEXT("camera_focus_value_set");
+	const TCHAR* kMethodIrMeteringModeSet = TEXT("ir_metering_mode_set");
+	const TCHAR* kMethodIrMeteringPointSet = TEXT("ir_metering_point_set");
+	const TCHAR* kMethodIrMeteringAreaSet = TEXT("ir_metering_area_set");
+	const TCHAR* kMethodCameraPointFocusAction = TEXT("camera_point_focus_action");
+	const TCHAR* kMethodCameraFocalLengthSet = TEXT("camera_focal_length_set");
+	const TCHAR* kMethodPoiModeEnter = TEXT("poi_mode_enter");
+	const TCHAR* kMethodPoiModeExit = TEXT("poi_mode_exit");
+	const TCHAR* kMethodPoiCircleSpeedSet = TEXT("poi_circle_speed_set");
 
 	// ---- 默认设备标识（与 dock script/common.py 假设备口径一致）----
 	const TCHAR* kDefaultDockSn = TEXT("DOCK3TEST001");

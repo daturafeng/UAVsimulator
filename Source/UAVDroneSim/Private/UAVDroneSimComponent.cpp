@@ -205,6 +205,105 @@ void UUAVDroneSimComponent::SetZoomFactor(double NewZoomFactor)
 	ZoomFactor = FMath::Clamp(NewZoomFactor, ZoomFactorMin, FMath::Max(ZoomFactorMin, ZoomFactorMax));
 }
 
+// ---- 相机设置状态 ----
+
+void UUAVDroneSimComponent::SetExposureMode(int32 NewMode)
+{
+	ExposureMode = FMath::Clamp(NewMode, 0, 3);
+}
+
+void UUAVDroneSimComponent::SetShutterSpeed(double NewShutterSpeed)
+{
+	// 快门速度下限 1/8000 秒，上限 1 秒
+	ShutterSpeed = FMath::Clamp(NewShutterSpeed, 1.0 / 8000.0, 1.0);
+}
+
+void UUAVDroneSimComponent::SetIso(int32 NewIso)
+{
+	Iso = FMath::Clamp(NewIso, 50, 12800);
+}
+
+void UUAVDroneSimComponent::SetExposureCompensation(double NewCompensation)
+{
+	ExposureCompensation = FMath::Clamp(NewCompensation, -3.0, 3.0);
+}
+
+void UUAVDroneSimComponent::SetFocusMode(int32 NewMode)
+{
+	FocusMode = FMath::Clamp(NewMode, 0, 2);
+}
+
+void UUAVDroneSimComponent::SetFocusValue(int32 NewValue)
+{
+	FocusValue = FMath::Clamp(NewValue, 0, 100);
+}
+
+void UUAVDroneSimComponent::SetPointFocusAction(const FString& InAction)
+{
+	PointFocusAction = InAction;
+}
+
+void UUAVDroneSimComponent::SetIrMeteringMode(int32 NewMode)
+{
+	IrMeteringMode = FMath::Clamp(NewMode, 0, 2);
+}
+
+void UUAVDroneSimComponent::SetIrMeteringPoint(double InX, double InY)
+{
+	IrMeteringPointX = FMath::Clamp(InX, 0.0, 1.0);
+	IrMeteringPointY = FMath::Clamp(InY, 0.0, 1.0);
+}
+
+void UUAVDroneSimComponent::SetIrMeteringArea(double InX, double InY, double InW, double InH)
+{
+	IrMeteringAreaX = FMath::Clamp(InX, 0.0, 1.0);
+	IrMeteringAreaY = FMath::Clamp(InY, 0.0, 1.0);
+	IrMeteringAreaW = FMath::Clamp(InW, 0.01, 1.0);
+	IrMeteringAreaH = FMath::Clamp(InH, 0.01, 1.0);
+}
+
+void UUAVDroneSimComponent::SetPhotoStorageLocation(const FString& InLocation)
+{
+	PhotoStorageLocation = InLocation.IsEmpty() ? TEXT("current") : InLocation;
+}
+
+void UUAVDroneSimComponent::SetVideoStorageLocation(const FString& InLocation)
+{
+	VideoStorageLocation = InLocation.IsEmpty() ? TEXT("current") : InLocation;
+}
+
+void UUAVDroneSimComponent::SetFocalLength(double NewFocalLength)
+{
+	FocalLength = FMath::Clamp(NewFocalLength, 1.0, 1000.0);
+}
+
+bool UUAVDroneSimComponent::GetLookAtTarget(FUAVGeoCoordinate& OutTarget) const
+{
+	if (!bHasLookAtTarget)
+	{
+		return false;
+	}
+	OutTarget = LookAtTarget;
+	return true;
+}
+
+void UUAVDroneSimComponent::SetLookAtTarget(const FUAVGeoCoordinate& InTarget)
+{
+	LookAtTarget = InTarget;
+	bHasLookAtTarget = true;
+}
+
+void UUAVDroneSimComponent::ClearLookAtTarget()
+{
+	bHasLookAtTarget = false;
+}
+
+void UUAVDroneSimComponent::SetPoiCircleSpeed(double InMaxSpeed, double InGimbalYawRate)
+{
+	PoiMaxSpeed = FMath::Max(0.0, InMaxSpeed);
+	PoiGimbalYawRate = FMath::Max(0.0, InGimbalYawRate);
+}
+
 void UUAVDroneSimComponent::TakePhoto()
 {
 	RemainingPhotoNum = FMath::Max(0, RemainingPhotoNum - 1);
