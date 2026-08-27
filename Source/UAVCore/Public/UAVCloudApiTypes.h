@@ -66,6 +66,7 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kMethodDroneControl;			// drone_control（虚拟摇杆指令）
 	UAVCORE_API extern const TCHAR* kMethodHeartBeat;				// heart_beat（DRC 心跳）
 	UAVCORE_API extern const TCHAR* kMethodDroneEmergencyStop;		// drone_emergency_stop（DRC 急停）
+	UAVCORE_API extern const TCHAR* kMethodOtaCreate;				// ota_create（固件升级指令，对齐 dock FirmwareMethodEnum）
 
 	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
 	UAVCORE_API extern const TCHAR* kMethodDebugModeOpen;				// debug_mode_open（开启调试模式）
@@ -103,6 +104,7 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kEventHms;						// hms
 	UAVCORE_API extern const TCHAR* kEventFlyToPointProgress;		// fly_to_point_progress
 	UAVCORE_API extern const TCHAR* kEventDrcStatusNotify;			// drc_status_notify（DRC 会话状态）
+	UAVCORE_API extern const TCHAR* kEventOtaProgress;				// ota_progress（固件升级进度事件，对齐 dock EventsMethodEnum）
 
 	// ---- 视频清晰度档位（与上云 API video_quality 语义一致）----
 	/** 推流参数（分辨率/码率/帧率） */

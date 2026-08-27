@@ -133,6 +133,30 @@ namespace
 		}
 		return FString();
 	}
+
+	/** 从 JSON 对象安全读取字符串字段（缺失或类型不符返回空串） */
+	FString GetDeviceStringField(const TSharedPtr<FJsonObject>& InDevice, const FString& InKey)
+	{
+		const TSharedPtr<FJsonValue> Value = InDevice.IsValid() ? InDevice->TryGetField(InKey) : nullptr;
+		return Value.IsValid() ? Value->AsString() : FString();
+	}
+
+	/** 校验固件版本字符串格式：xx.xx.xxxx（对齐 dock OtaCreateDevice product_version 的 @Pattern） */
+	bool IsValidFirmwareVersionFormat(const FString& InVersion)
+	{
+		if (InVersion.Len() != 10 || InVersion[2] != TEXT('.') || InVersion[5] != TEXT('.'))
+		{
+			return false;
+		}
+		for (int32 i = 0; i < InVersion.Len(); ++i)
+		{
+			if (i != 2 && i != 5 && !FChar::IsDigit(InVersion[i]))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
 }
 
 UUAVMqttBridgeComponent::UUAVMqttBridgeComponent()
@@ -320,6 +344,10 @@ void UUAVMqttBridgeComponent::OnMqttConnect(EMQTTConnectReturnCode ReturnCode)
 		PublishDeviceState(DroneSn, true);
 		// 上报直播能力（dock 依赖 live_capacity 建立直播能力缓存）
 		PublishLiveCapacity();
+		// 上报固件版本（dock 依赖 firmware_version state 展示机场/无人机/载荷固件信息）
+		PublishDockFirmwareVersion();
+		PublishDroneFirmwareVersion();
+		PublishPayloadFirmwareVersion();
 		// 上报 HMS 空告警（dock 依赖 hms 记录设备告警）
 		PublishHms(BuildHmsPayload());
 
@@ -429,6 +457,34 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 				PublishEvent(Method, BuildRemoteDebugProgressEventData(TEXT("sent"), 0, 1, 1, StepKey, 0));
 				PublishEvent(Method, BuildRemoteDebugProgressEventData(TEXT("ok"), 100, 1, 1, StepKey, 0));
 			}
+		}
+		else
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
+	else if (Method == kMethodOtaCreate)
+	{
+		// OTA 固件升级指令：校验 devices 并同步模拟 sent → in_progress → ok 三段进度（对齐 AbstractFirmwareService.otaCreate）
+		Result = HandleOtaCreate(Method, DataJson);
+		if (Result == UAV::FlightControlResult::Success)
+		{
+			const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+			Output->SetStringField(TEXT("status"), TEXT("sent"));
+			PublishServicesReply(Method, Tid, Bid, Result, InSn, Output);
+
+			// 同步发布 sent → in_progress → ok 三段进度事件（对齐 OtaProgressStatusEnum / OtaProgressStepEnum：1=下载、2=升级）
+			PublishEvent(kEventOtaProgress, BuildOtaProgressEventData(TEXT("sent"), 0, 1, 0));
+			PublishEvent(kEventOtaProgress, BuildOtaProgressEventData(TEXT("in_progress"), 50, 1, 0));
+			PublishEvent(kEventOtaProgress, BuildOtaProgressEventData(TEXT("ok"), 100, 2, 0));
+
+			// 升级完成：目标版本落地并重发固件版本 state
+			CompleteOtaUpgrade();
+			PublishDockFirmwareVersion();
+			PublishDroneFirmwareVersion();
+			PublishPayloadFirmwareVersion();
 		}
 		else
 		{
@@ -652,6 +708,72 @@ void UUAVMqttBridgeComponent::PublishLiveCapacity()
 		Msg.SetPayloadFromString(Json);
 		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
 		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布直播能力 state：%s"), *Json);
+	}
+}
+
+void UUAVMqttBridgeComponent::PublishDockFirmwareVersion()
+{
+	if (!MqttClient || !bConnected)
+	{
+		return;
+	}
+	const TSharedRef<FJsonObject> State = MakeTelemetryHeader();
+	State->SetStringField(TEXT("gateway"), DockSn);
+	State->SetObjectField(TEXT("data"), BuildDockFirmwareVersionData().ToSharedRef());
+
+	const FString Topic = MakeTopic(kTopicStateTemplate, DockSn);
+	const FString Json = SerializeJson(State);
+	if (!Json.IsEmpty())
+	{
+		FMQTTClientMessage Msg;
+		Msg.Topic = Topic;
+		Msg.SetPayloadFromString(Json);
+		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布机场固件版本 state：%s"), *Json);
+	}
+}
+
+void UUAVMqttBridgeComponent::PublishDroneFirmwareVersion()
+{
+	if (!MqttClient || !bConnected)
+	{
+		return;
+	}
+	const TSharedRef<FJsonObject> State = MakeTelemetryHeader();
+	State->SetStringField(TEXT("gateway"), DockSn);
+	State->SetObjectField(TEXT("data"), BuildDroneFirmwareVersionData().ToSharedRef());
+
+	const FString Topic = MakeTopic(kTopicStateTemplate, DroneSn);
+	const FString Json = SerializeJson(State);
+	if (!Json.IsEmpty())
+	{
+		FMQTTClientMessage Msg;
+		Msg.Topic = Topic;
+		Msg.SetPayloadFromString(Json);
+		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布无人机固件版本 state：%s"), *Json);
+	}
+}
+
+void UUAVMqttBridgeComponent::PublishPayloadFirmwareVersion()
+{
+	if (!MqttClient || !bConnected)
+	{
+		return;
+	}
+	const TSharedRef<FJsonObject> State = MakeTelemetryHeader();
+	State->SetStringField(TEXT("gateway"), DockSn);
+	State->SetObjectField(TEXT("data"), BuildPayloadFirmwareVersionData().ToSharedRef());
+
+	const FString Topic = MakeTopic(kTopicStateTemplate, DroneSn);
+	const FString Json = SerializeJson(State);
+	if (!Json.IsEmpty())
+	{
+		FMQTTClientMessage Msg;
+		Msg.Topic = Topic;
+		Msg.SetPayloadFromString(Json);
+		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布载荷固件版本 state：%s"), *Json);
 	}
 }
 
@@ -1394,6 +1516,143 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildRemoteDebugProgressEventDa
 	Progress->SetNumberField(TEXT("stepResult"), InStepResult);
 	Output->SetObjectField(TEXT("progress"), Progress);
 	Data->SetObjectField(TEXT("output"), Output);
+	return Data;
+}
+
+int32 UUAVMqttBridgeComponent::HandleOtaCreate(const FString& InMethod, const FString& InDataJson)
+{
+	using namespace UAV::FlightControlResult;
+
+	// 仅支持 ota_create（分发入口已精确匹配，此处双保险）
+	if (InMethod != kMethodOtaCreate)
+	{
+		return UnknownMethod;
+	}
+
+	// 解析 data：{devices:[OtaCreateDevice]}（字段为 snake_case，对齐 SDK 全局 SNAKE_CASE 序列化）
+	TSharedPtr<FJsonObject> Data;
+	if (InDataJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+	{
+		return InvalidParams;
+	}
+
+	// devices 必须是 1-2 个设备的数组（对齐 OtaCreateRequest 的 @Size(min=1, max=2)）
+	const TArray<TSharedPtr<FJsonValue>>* Devices = nullptr;
+	if (!Data->TryGetArrayField(TEXT("devices"), Devices) || Devices->Num() < 1 || Devices->Num() > 2)
+	{
+		return InvalidParams;
+	}
+
+	// 逐项校验设备字段：sn / product_version / file_url / md5 / file_size / firmware_upgrade_type / file_name 全部必填且合法
+	for (const TSharedPtr<FJsonValue>& DeviceValue : *Devices)
+	{
+		if (!DeviceValue.IsValid() || DeviceValue->Type != EJson::Object)
+		{
+			return InvalidParams;
+		}
+		const TSharedPtr<FJsonObject> Device = DeviceValue->AsObject();
+		if (!Device.IsValid())
+		{
+			return InvalidParams;
+		}
+
+		// 字符串字段：sn / file_url / md5 / file_name 非空
+		if (GetDeviceStringField(Device, TEXT("sn")).IsEmpty()
+			|| GetDeviceStringField(Device, TEXT("file_url")).IsEmpty()
+			|| GetDeviceStringField(Device, TEXT("md5")).IsEmpty()
+			|| GetDeviceStringField(Device, TEXT("file_name")).IsEmpty())
+		{
+			return InvalidParams;
+		}
+
+		// product_version：格式 xx.xx.xxxx（对齐 OtaCreateDevice 的 @Pattern）
+		if (!IsValidFirmwareVersionFormat(GetDeviceStringField(Device, TEXT("product_version"))))
+		{
+			return InvalidParams;
+		}
+
+		// 数值字段：file_size 存在且为数字
+		const TSharedPtr<FJsonValue> FileSizeValue = Device->TryGetField(TEXT("file_size"));
+		if (!FileSizeValue.IsValid() || FileSizeValue->Type != EJson::Number)
+		{
+			return InvalidParams;
+		}
+
+		// firmware_upgrade_type：仅 2=NORMAL_UPGRADE / 3=CONSISTENT_UPGRADE（对齐 FirmwareUpgradeTypeEnum）
+		const TSharedPtr<FJsonValue> UpgradeTypeValue = Device->TryGetField(TEXT("firmware_upgrade_type"));
+		if (!UpgradeTypeValue.IsValid() || UpgradeTypeValue->Type != EJson::Number)
+		{
+			return InvalidParams;
+		}
+		const int32 UpgradeType = static_cast<int32>(UpgradeTypeValue->AsNumber());
+		if (UpgradeType != 2 && UpgradeType != 3)
+		{
+			return InvalidParams;
+		}
+	}
+
+	// 全部设备校验通过：记录目标版本并进入升级中（整包升级模拟，机场/无人机/载荷统一按目标版本更新）
+	OtaTargetVersion = GetDeviceStringField((*Devices)[0]->AsObject(), TEXT("product_version"));
+	bOtaUpgrading = true;
+	return Success;
+}
+
+void UUAVMqttBridgeComponent::CompleteOtaUpgrade()
+{
+	// 升级完成（ok 进度事件已发布）：目标版本落地为当前版本，恢复非升级状态
+	if (!OtaTargetVersion.IsEmpty())
+	{
+		DockFirmwareVersion = OtaTargetVersion;
+		DroneFirmwareVersion = OtaTargetVersion;
+		PayloadFirmwareVersion = OtaTargetVersion;
+	}
+	bOtaUpgrading = false;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildOtaProgressEventData(const FString& InStatus, int32 InPercent, int32 InCurrentStep, int32 InRate) const
+{
+	// 对齐 dock EventsDataRequest<OtaProgress>：data={result:0, output:{status, progress:{percent, current_step}, ext:{rate}}}
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), 0);
+	const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+	Output->SetStringField(TEXT("status"), InStatus);
+	const TSharedRef<FJsonObject> Progress = MakeShared<FJsonObject>();
+	Progress->SetNumberField(TEXT("percent"), InPercent);
+	Progress->SetNumberField(TEXT("current_step"), InCurrentStep);
+	Output->SetObjectField(TEXT("progress"), Progress);
+	const TSharedRef<FJsonObject> Ext = MakeShared<FJsonObject>();
+	Ext->SetNumberField(TEXT("rate"), InRate);
+	Output->SetObjectField(TEXT("ext"), Ext);
+	Data->SetObjectField(TEXT("output"), Output);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockFirmwareVersionData() const
+{
+	// 对齐 dock DockFirmwareVersion：data={firmware_version, compatible_status, firmware_upgrade_status}
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("firmware_version"), DockFirmwareVersion);
+	Data->SetBoolField(TEXT("compatible_status"), false);
+	Data->SetBoolField(TEXT("firmware_upgrade_status"), bOtaUpgrading);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDroneFirmwareVersionData() const
+{
+	// 对齐 dock FirmwareVersion（RcStateDataKeyEnum.FIRMWARE_VERSION）：data={firmware_version}
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("firmware_version"), DroneFirmwareVersion);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildPayloadFirmwareVersionData() const
+{
+	// 对齐 dock PayloadFirmwareVersion：data={载荷索引:{firmware_version}}（载荷索引如 52-0-0）
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(TEXT("firmware_version"), PayloadFirmwareVersion);
+	Data->SetObjectField(CameraIndex, Payload);
 	return Data;
 }
 

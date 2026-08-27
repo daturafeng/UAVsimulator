@@ -84,6 +84,24 @@ public:
 	/** 组装 RemoteDebugProgress 进度事件 data（对齐 dock RemoteDebugProgress：data={result:0, output:{status, progress:{percent, currentStep, totalSteps, stepKey?, stepResult}}}；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildRemoteDebugProgressEventData(const FString& InStatus, int32 InPercent, int32 InCurrentStep, int32 InTotalSteps, const FString& InStepKey, int32 InStepResult) const;
 
+	/** 组装 ota_progress 事件 data（对齐 dock EventsDataRequest<OtaProgress>：data={result:0, output:{status, progress:{percent, current_step}, ext:{rate}}}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildOtaProgressEventData(const FString& InStatus, int32 InPercent, int32 InCurrentStep, int32 InRate) const;
+
+	/** OTA 固件升级指令处理：校验 devices（1-2 个设备、字段齐全合法），记录目标版本并置升级中，返回 result（对齐 dock AbstractFirmwareService.otaCreate；自动化测试入口） */
+	int32 HandleOtaCreate(const FString& InMethod, const FString& InDataJson);
+
+	/** 完成 OTA 升级：目标版本落地为当前版本并复位升级标志（ok 事件后调用；自动化测试入口） */
+	void CompleteOtaUpgrade();
+
+	/** 组装机场固件版本 state data（对齐 dock DockFirmwareVersion：data={firmware_version, compatible_status, firmware_upgrade_status}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildDockFirmwareVersionData() const;
+
+	/** 组装无人机固件版本 state data（对齐 dock FirmwareVersion：data={firmware_version}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildDroneFirmwareVersionData() const;
+
+	/** 组装载荷固件版本 state data（对齐 dock PayloadFirmwareVersion：data={载荷索引:{firmware_version}}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildPayloadFirmwareVersionData() const;
+
 	// ---- 配置（默认值对齐 dock 联调环境） ----
 	/** Broker 地址 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
@@ -199,6 +217,15 @@ protected:
 
 	/** 发布直播能力（thing/product/{DockSn}/state，对齐 dock report_live_capacity.py） */
 	void PublishLiveCapacity();
+
+	/** 发布机场固件版本 state（thing/product/{DockSn}/state，对齐 dock DockStateDataKeyEnum.FIRMWARE_VERSION） */
+	void PublishDockFirmwareVersion();
+
+	/** 发布无人机固件版本 state（thing/product/{DroneSn}/state，对齐 dock RcStateDataKeyEnum.FIRMWARE_VERSION） */
+	void PublishDroneFirmwareVersion();
+
+	/** 发布载荷固件版本 state（thing/product/{DroneSn}/state，对齐 dock PayloadFirmwareVersion） */
+	void PublishPayloadFirmwareVersion();
 
 	/** 发布 hms 告警事件（thing/product/{DockSn}/events，method=hms） */
 	void PublishHms(const TSharedPtr<FJsonObject>& InHmsData);
@@ -332,4 +359,25 @@ private:
 	/** 无人机电源开启（drone_open/close，联动 OSD 子设备在线状态） */
 	UPROPERTY()
 	bool bDronePowerOn = true;
+
+	// ---- OTA 固件升级模拟状态（ota_create 指令驱动，固件版本 state 联动输出）----
+	/** 升级目标版本（ota_create 的 product_version；ok 事件后落地为当前版本） */
+	UPROPERTY()
+	FString OtaTargetVersion;
+
+	/** 升级进行中（ok 事件前为 true，固件版本 state 的 firmware_upgrade_status 联动） */
+	UPROPERTY()
+	bool bOtaUpgrading = false;
+
+	/** 机场当前固件版本（默认占位，升级完成后更新为目标版本） */
+	UPROPERTY()
+	FString DockFirmwareVersion = TEXT("03.01.0000");
+
+	/** 无人机当前固件版本（默认占位，升级完成后更新为目标版本） */
+	UPROPERTY()
+	FString DroneFirmwareVersion = TEXT("03.01.0000");
+
+	/** 载荷当前固件版本（默认占位，随整包升级更新） */
+	UPROPERTY()
+	FString PayloadFirmwareVersion = TEXT("03.01.0000");
 };

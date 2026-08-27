@@ -62,6 +62,7 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodDroneControl = TEXT("drone_control");
 	const TCHAR* kMethodHeartBeat = TEXT("heart_beat");
 	const TCHAR* kMethodDroneEmergencyStop = TEXT("drone_emergency_stop");
+	const TCHAR* kMethodOtaCreate = TEXT("ota_create");
 
 	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
 	const TCHAR* kMethodDebugModeOpen = TEXT("debug_mode_open");
@@ -99,6 +100,7 @@ namespace UAV::CloudApi
 	const TCHAR* kEventHms = TEXT("hms");
 	const TCHAR* kEventFlyToPointProgress = TEXT("fly_to_point_progress");
 	const TCHAR* kEventDrcStatusNotify = TEXT("drc_status_notify");
+	const TCHAR* kEventOtaProgress = TEXT("ota_progress");
 
 	FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality)
 	{
