@@ -1,0 +1,25 @@
+# UE 5.x 生成的中间产物
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# IDE / 编辑器本地文件
+.vs/
+.vscode/
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.suo
+*.user
+*.ncb
+*.sln.docstates
+
+# Codex 本地工具（工作区专用，不入库）
+.codex/
+
+# 杂项
+*.log
+.DS_Store
+Thumbs.db
