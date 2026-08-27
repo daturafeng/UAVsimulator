@@ -65,6 +65,7 @@ void UUAVCameraStreamComponent::BeginPlay()
 void UUAVCameraStreamComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	// 兜底清理：停止所有推流并回收子进程与管道
+	CancelReconnect();
 	for (FUAVLiveSession& Session : Sessions)
 	{
 		Session.bStreaming = false;
@@ -98,12 +99,7 @@ void UUAVCameraStreamComponent::TickComponent(float DeltaTime, ELevelTick TickTy
 	int32 ExitCode = 0;
 	if (FPlatformProcess::GetProcReturnCode(FfmpegProcess, &ExitCode))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[UAVCameraStream] FFmpeg 意外退出（码 %d），停止推流：%s"), ExitCode, *ActiveStreamVideoId);
-		if (FUAVLiveSession* Session = FindSession(ActiveStreamVideoId))
-		{
-			Session->bStreaming = false;
-			OnLiveStatusChanged.Broadcast(Session->VideoId);
-		}
+		const FString ExitedVideoId = ActiveStreamVideoId;
 		FPlatformProcess::CloseProc(FfmpegProcess);
 		FfmpegProcess.Reset();
 		if (StdinWritePipe)
@@ -112,7 +108,24 @@ void UUAVCameraStreamComponent::TickComponent(float DeltaTime, ELevelTick TickTy
 			StdinWritePipe = nullptr;
 			StdoutReadPipe = nullptr;
 		}
-		ActiveStreamVideoId.Reset();
+		UE_LOG(LogTemp, Warning, TEXT("[UAVCameraStream] FFmpeg 意外退出（码 %d）：%s"), ExitCode, *ExitedVideoId);
+
+		// 按策略自动重连：记录重连目标并调度，重连期间会话保持推流状态
+		if (UAV::Ffmpeg::ShouldRetryReconnect(ReconnectAttempts, MaxReconnectAttempts))
+		{
+			ReconnectVideoId = ExitedVideoId;
+			ActiveStreamVideoId.Reset();
+			ScheduleReconnect();
+		}
+		else
+		{
+			if (FUAVLiveSession* Session = FindSession(ExitedVideoId))
+			{
+				Session->bStreaming = false;
+				OnLiveStatusChanged.Broadcast(Session->VideoId);
+			}
+			ActiveStreamVideoId.Reset();
+		}
 		return;
 	}
 
@@ -265,6 +278,8 @@ int32 UUAVCameraStreamComponent::HandleLiveStopPush(const TSharedPtr<FJsonObject
 		UE_LOG(LogTemp, Warning, TEXT("[UAVCameraStream] live_stop_push 未找到会话：%s"), *VideoId);
 		return kResultSessionNotFound;
 	}
+	// 重连等待期间收到停止指令：取消重连再停止，防止旧回调复活推流
+	CancelReconnect();
 	StopStreaming(*Session);
 	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 停止推流：%s"), *VideoId);
 	OnLiveStatusChanged.Broadcast(VideoId);
@@ -289,7 +304,16 @@ int32 UUAVCameraStreamComponent::HandleLiveSetQuality(const TSharedPtr<FJsonObje
 	// 运行时切换清晰度：重启 FFmpeg 子进程应用新档位参数
 	if (Session->bStreaming && ActiveStreamVideoId == VideoId)
 	{
+		// 若处于重连等待，先取消旧调度，再按新档位重启
+		CancelReconnect();
 		StopStreaming(*Session);
+		Session->bStreaming = true;
+		StartStreaming(*Session);
+	}
+	else if (Session->bStreaming && ReconnectVideoId == VideoId)
+	{
+		// 重连等待中切换清晰度：取消重连并按新档位立即重启
+		CancelReconnect();
 		Session->bStreaming = true;
 		StartStreaming(*Session);
 	}
@@ -530,4 +554,79 @@ void UUAVCameraStreamComponent::EnsureRenderTarget()
 	Capture->RegisterComponent();
 	AutoCapture = Capture;
 	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 自动创建 SceneCapture2D + RenderTarget：%dx%d"), AutoRenderTargetWidth, AutoRenderTargetHeight);
+}
+
+void UUAVCameraStreamComponent::CancelReconnect()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReconnectTimerHandle);
+	}
+	ReconnectTimerHandle.Invalidate();
+	ReconnectVideoId.Reset();
+	ReconnectAttempts = 0;
+}
+
+void UUAVCameraStreamComponent::ScheduleReconnect()
+{
+	if (ReconnectVideoId.IsEmpty())
+	{
+		return;
+	}
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const double Delay = UAV::Ffmpeg::NextReconnectDelaySeconds(ReconnectAttempts, ReconnectIntervalSeconds, ReconnectMaxIntervalSeconds);
+	World->GetTimerManager().SetTimer(
+		ReconnectTimerHandle,
+		FTimerDelegate::CreateUObject(this, &UUAVCameraStreamComponent::OnReconnectTimer),
+		Delay,
+		false);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 计划重连（第 %d 次，%.1f 秒后）：%s"), ReconnectAttempts + 1, Delay, *ReconnectVideoId);
+}
+
+void UUAVCameraStreamComponent::OnReconnectTimer()
+{
+	ReconnectTimerHandle.Invalidate();
+	if (ReconnectVideoId.IsEmpty())
+	{
+		return;
+	}
+
+	FUAVLiveSession* Session = FindSession(ReconnectVideoId);
+	if (!Session || !Session->bStreaming)
+	{
+		// 会话已不存在或已停止（例如重连等待期间被停止），放弃重连
+		CancelReconnect();
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 尝试重连推流：%s"), *Session->VideoId);
+	if (StartStreaming(*Session))
+	{
+		// 重连成功：清空重连状态（StartStreaming 已恢复 ActiveStreamVideoId）
+		ReconnectVideoId.Reset();
+		ReconnectAttempts = 0;
+		return;
+	}
+
+	// 重连失败：继续重试或达到上限停止
+	++ReconnectAttempts;
+	if (UAV::Ffmpeg::ShouldRetryReconnect(ReconnectAttempts, MaxReconnectAttempts))
+	{
+		ScheduleReconnect();
+		return;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[UAVCameraStream] 重连次数达到上限（%d），停止推流：%s"), MaxReconnectAttempts, *Session->VideoId);
+	Session->bStreaming = false;
+	if (ActiveStreamVideoId == Session->VideoId)
+	{
+		ActiveStreamVideoId.Reset();
+	}
+	OnLiveStatusChanged.Broadcast(Session->VideoId);
+	CancelReconnect();
 }

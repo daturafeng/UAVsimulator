@@ -88,6 +88,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live")
 	int32 AutoRenderTargetHeight = 720;
 
+	/** FFmpeg 意外退出后的最大重连次数（0=禁用自动重连，保持"失败即停止"旧行为；默认 3） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live", meta = (ClampMin = "0"))
+	int32 MaxReconnectAttempts = 3;
+
+	/** 重连基础间隔（秒），按指数退避递增 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live", meta = (ClampMin = "0.1"))
+	double ReconnectIntervalSeconds = 5.0;
+
+	/** 重连退避间隔上限（秒），防止无限拉长 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live", meta = (ClampMin = "0.1"))
+	double ReconnectMaxIntervalSeconds = 30.0;
+
 	// ---- 事件 ----
 	/** 直播状态变更事件 */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|Live|Event")
@@ -147,6 +159,15 @@ protected:
 	/** 确保画面源有效：未配置时自动创建 SceneCapture2D + RenderTarget */
 	void EnsureRenderTarget();
 
+	/** 取消待执行的重连 Timer 并清空重连状态 */
+	void CancelReconnect();
+
+	/** 按退避策略调度下一次重连 */
+	void ScheduleReconnect();
+
+	/** 重连 Timer 回调：按会话当前档位重新启动推流 */
+	void OnReconnectTimer();
+
 private:
 	/** 直播会话列表 */
 	TArray<FUAVLiveSession> Sessions;
@@ -173,4 +194,13 @@ private:
 
 	/** 上次写帧时间（秒） */
 	float LastFrameWriteTime = 0.0f;
+
+	/** 重连目标的 video_id（重连等待期间 ActiveStreamVideoId 为空） */
+	FString ReconnectVideoId;
+
+	/** 已用重连次数 */
+	int32 ReconnectAttempts = 0;
+
+	/** 重连 Timer 句柄 */
+	FTimerHandle ReconnectTimerHandle;
 };

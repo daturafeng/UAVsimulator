@@ -3,6 +3,11 @@
 
 namespace UAV::Ffmpeg
 {
+	namespace
+	{
+		constexpr double kMaxReasonableDelaySeconds = 3600.0;
+	}
+
 	FString MakePushCommand(const FString& InFfmpegPath, const UAV::CloudApi::FUAVVideoQualityParams& InParams, const FString& InRtmpUrl, int32 InSourceWidth, int32 InSourceHeight)
 	{
 		// ffmpeg 路径含空格时加引号（CreateProc 直接解析命令行，无 shell）
@@ -35,5 +40,27 @@ namespace UAV::Ffmpeg
 
 		return FString::Printf(TEXT("%s -f rawvideo -pix_fmt bgra -s %dx%d -r %d -i - -c:v libx264 -preset ultrafast -tune zerolatency -b:v %dk%s -f flv %s"),
 			*Ffmpeg, SrcW, SrcH, Fps, Kbps, *ScaleArgs, *Url);
+	}
+
+	bool ShouldRetryReconnect(const int32 InAttemptsUsed, const int32 InMaxAttempts)
+	{
+		return InMaxAttempts > 0 && InAttemptsUsed < InMaxAttempts;
+	}
+
+	double NextReconnectDelaySeconds(const int32 InAttempt, const double InBaseSeconds, const double InMaxSeconds)
+	{
+		if (InBaseSeconds <= 0.0 || InAttempt < 0)
+		{
+			return 0.0;
+		}
+
+		// 指数退避，防止 2^N 溢出：超过封顶直接取封顶
+		const int32 Shift = InAttempt > 30 ? 30 : InAttempt;
+		const double Raw = InBaseSeconds * static_cast<double>(1LL << Shift);
+		if (InMaxSeconds > 0.0)
+		{
+			return FMath::Min(Raw, InMaxSeconds);
+		}
+		return FMath::Min(Raw, kMaxReasonableDelaySeconds);
 	}
 }
