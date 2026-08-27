@@ -51,6 +51,9 @@ public:
 	/** 组装机场 OSD data（对齐 dock OsdDock 完整字段；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildDockOsdPayload() const;
 
+	/** 组装直播能力 data（data.live_capacity，对齐 dock DockLiveCapacity / report_live_capacity.py；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildLiveCapacityPayload() const;
+
 	// ---- 配置（默认值对齐 dock 联调环境） ----
 	/** Broker 地址 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
@@ -154,6 +157,9 @@ protected:
 
 	/** 发布载荷控制源（thing/product/{DroneSn}/state，对齐 dock report_control_source.py） */
 	void PublishPayloadControlSource();
+
+	/** 发布直播能力（thing/product/{DockSn}/state，对齐 dock report_live_capacity.py） */
+	void PublishLiveCapacity();
 
 	// ---- 事件回调（BeginPlay 时绑定飞控/相机委托） ----
 	UFUNCTION()

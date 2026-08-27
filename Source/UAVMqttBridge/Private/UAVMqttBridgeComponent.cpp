@@ -217,6 +217,8 @@ void UUAVMqttBridgeComponent::OnMqttConnect(EMQTTConnectReturnCode ReturnCode)
 		PublishOnlineStatus(true);
 		PublishDeviceState(DockSn, true);
 		PublishDeviceState(DroneSn, true);
+		// 上报直播能力（dock 依赖 live_capacity 建立直播能力缓存）
+		PublishLiveCapacity();
 
 		OnConnectionChanged.Broadcast(true);
 	}
@@ -418,6 +420,28 @@ void UUAVMqttBridgeComponent::PublishPayloadControlSource()
 		Msg.SetPayloadFromString(Json);
 		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
 		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布载荷控制源 state：%s"), *Json);
+	}
+}
+
+void UUAVMqttBridgeComponent::PublishLiveCapacity()
+{
+	if (!MqttClient || !bConnected)
+	{
+		return;
+	}
+	const TSharedRef<FJsonObject> State = MakeTelemetryHeader();
+	State->SetStringField(TEXT("gateway"), DockSn);
+	State->SetObjectField(TEXT("data"), BuildLiveCapacityPayload().ToSharedRef());
+
+	const FString Topic = MakeTopic(kTopicStateTemplate, DockSn);
+	const FString Json = SerializeJson(State);
+	if (!Json.IsEmpty())
+	{
+		FMQTTClientMessage Msg;
+		Msg.Topic = Topic;
+		Msg.SetPayloadFromString(Json);
+		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布直播能力 state：%s"), *Json);
 	}
 }
 
@@ -770,6 +794,77 @@ int32 UUAVMqttBridgeComponent::GetFlightTaskStepCode() const
 bool UUAVMqttBridgeComponent::IsDockInMission() const
 {
 	return DroneSim && DroneSim->GetFlightState() != EUAVFlightState::Idle;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildLiveCapacityPayload() const
+{
+	// 对齐 dock report_live_capacity.py：网关（165-0-7 普通相机）+ 无人机（176-0-0 普通相机、52-0-0 主载荷）
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	const TSharedRef<FJsonObject> Capacity = MakeShared<FJsonObject>();
+
+	// 构造视频项（video_index/video_type/switchable_video_types）
+	auto MakeVideo = [](const FString& InVideoIndex, const FString& InVideoType, const TArray<FString>& InSwitchableTypes)
+	{
+		const TSharedRef<FJsonObject> Video = MakeShared<FJsonObject>();
+		Video->SetStringField(TEXT("video_index"), InVideoIndex);
+		Video->SetStringField(TEXT("video_type"), InVideoType);
+		TArray<TSharedPtr<FJsonValue>> Switchable;
+		for (const FString& Type : InSwitchableTypes)
+		{
+			Switchable.Add(MakeShared<FJsonValueString>(Type));
+		}
+		Video->SetArrayField(TEXT("switchable_video_types"), Switchable);
+		return Video;
+	};
+
+	// 构造相机项（camera_index/available_video_number/coexist_video_number_max/video_list）
+	auto MakeCamera = [&MakeVideo](const FString& InCameraIndex, const TArray<TSharedPtr<FJsonValue>>& InVideoList)
+	{
+		const TSharedRef<FJsonObject> Camera = MakeShared<FJsonObject>();
+		Camera->SetStringField(TEXT("camera_index"), InCameraIndex);
+		Camera->SetNumberField(TEXT("available_video_number"), InVideoList.Num());
+		Camera->SetNumberField(TEXT("coexist_video_number_max"), 1);
+		Camera->SetArrayField(TEXT("video_list"), InVideoList);
+		return Camera;
+	};
+
+	// 网关直播设备项：机场 165-0-7 相机（normal-0 / normal）
+	const TArray<TSharedPtr<FJsonValue>> GatewayVideos = {
+		MakeShared<FJsonValueObject>(MakeVideo(TEXT("normal-0"), TEXT("normal"), { TEXT("normal") })),
+	};
+	const TSharedRef<FJsonObject> GatewayDevice = MakeShared<FJsonObject>();
+	GatewayDevice->SetStringField(TEXT("sn"), DockSn);
+	GatewayDevice->SetNumberField(TEXT("available_video_number"), GatewayVideos.Num());
+	GatewayDevice->SetNumberField(TEXT("coexist_video_number_max"), 1);
+	GatewayDevice->SetArrayField(TEXT("camera_list"), {
+		MakeShared<FJsonValueObject>(MakeCamera(TEXT("165-0-7"), GatewayVideos)),
+	});
+
+	// 无人机直播设备项：176-0-0 普通相机（normal）+ 相机索引主载荷（zoom，可切换 normal/wide/zoom/ir）
+	const TArray<TSharedPtr<FJsonValue>> NormalVideos = {
+		MakeShared<FJsonValueObject>(MakeVideo(TEXT("normal-0"), TEXT("normal"), { TEXT("normal") })),
+	};
+	const TArray<TSharedPtr<FJsonValue>> PayloadVideos = {
+		MakeShared<FJsonValueObject>(MakeVideo(TEXT("normal-0"), TEXT("zoom"), { TEXT("normal"), TEXT("wide"), TEXT("zoom"), TEXT("ir") })),
+	};
+	const TSharedRef<FJsonObject> DroneDevice = MakeShared<FJsonObject>();
+	DroneDevice->SetStringField(TEXT("sn"), DroneSn);
+	DroneDevice->SetNumberField(TEXT("available_video_number"), NormalVideos.Num() + PayloadVideos.Num());
+	DroneDevice->SetNumberField(TEXT("coexist_video_number_max"), 1);
+	DroneDevice->SetArrayField(TEXT("camera_list"), {
+		MakeShared<FJsonValueObject>(MakeCamera(TEXT("176-0-0"), NormalVideos)),
+		MakeShared<FJsonValueObject>(MakeCamera(CameraIndex, PayloadVideos)),
+	});
+
+	const TArray<TSharedPtr<FJsonValue>> DeviceList = {
+		MakeShared<FJsonValueObject>(GatewayDevice),
+		MakeShared<FJsonValueObject>(DroneDevice),
+	};
+	Capacity->SetNumberField(TEXT("available_video_number"), 3);
+	Capacity->SetNumberField(TEXT("coexist_video_number_max"), 3);
+	Capacity->SetArrayField(TEXT("device_list"), DeviceList);
+	Data->SetObjectField(TEXT("live_capacity"), Capacity);
+	return Data;
 }
 
 TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
