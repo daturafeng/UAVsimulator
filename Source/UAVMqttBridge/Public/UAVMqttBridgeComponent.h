@@ -48,6 +48,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge")
 	void SetCameraStream(UUAVCameraStreamComponent* InCameraStream);
 
+	/** 组装机场 OSD data（对齐 dock OsdDock 完整字段；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildDockOsdPayload() const;
+
 	// ---- 配置（默认值对齐 dock 联调环境） ----
 	/** Broker 地址 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
@@ -177,6 +180,16 @@ protected:
 
 	/** 飞行状态 → 上云 API mode_code */
 	int32 FlightStateToModeCode(EUAVFlightState InState) const;
+
+protected:
+	/** 归巢待命判定：无人机在机场原点 ±0.00002 度内、高度 ≤12 且待机 */
+	bool IsDroneInDock() const;
+
+	/** 飞行状态 → 上云 API flighttask_step_code（对齐 dock report_dock_osd.py） */
+	int32 GetFlightTaskStepCode() const;
+
+	/** 机场是否处于任务中（无人机非待机即视为机场执行任务） */
+	bool IsDockInMission() const;
 
 private:
 	/** 关联的飞控组件 */

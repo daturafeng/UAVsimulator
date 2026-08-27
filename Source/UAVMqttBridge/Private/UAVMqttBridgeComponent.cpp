@@ -722,10 +722,7 @@ void UUAVMqttBridgeComponent::PublishDockOsd()
 	}
 	const TSharedRef<FJsonObject> Osd = MakeTelemetryHeader();
 	Osd->SetStringField(TEXT("gateway"), DockSn);
-	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
-	Data->SetStringField(TEXT("sn"), DockSn);
-	Data->SetNumberField(TEXT("drone_status"), DroneSim ? static_cast<int32>(DroneSim->GetFlightState()) : 0);
-	Osd->SetObjectField(TEXT("data"), Data);
+	Osd->SetObjectField(TEXT("data"), BuildDockOsdPayload().ToSharedRef());
 	const FString Topic = MakeTopic(kTopicOsdTemplate, DockSn);
 	const FString Json = SerializeJson(Osd);
 	if (!Json.IsEmpty())
@@ -735,4 +732,178 @@ void UUAVMqttBridgeComponent::PublishDockOsd()
 		Msg.SetPayloadFromString(Json);
 		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
 	}
+}
+
+bool UUAVMqttBridgeComponent::IsDroneInDock() const
+{
+	if (!DroneSim)
+	{
+		return false;
+	}
+	// 对齐 dock report_dock_osd.py：无人机在机场原点 ±0.00002 度内、高度 ≤12、且不在任务中
+	const FUAVGeoCoordinate Geo = DroneSim->GetCurrentGeoCoordinate();
+	const bool bNearAirport = FMath::Abs(Geo.Latitude - DroneSim->AirportOrigin.Latitude) < 0.00002
+		&& FMath::Abs(Geo.Longitude - DroneSim->AirportOrigin.Longitude) < 0.00002;
+	return bNearAirport && Geo.Altitude <= 12.0 && DroneSim->GetFlightState() == EUAVFlightState::Idle;
+}
+
+int32 UUAVMqttBridgeComponent::GetFlightTaskStepCode() const
+{
+	if (!DroneSim)
+	{
+		return 5;
+	}
+	// 对齐 dock 口径：任务中（起飞/航线）=0，返航/降落=2，其余=5
+	switch (DroneSim->GetFlightState())
+	{
+	case EUAVFlightState::TakingOff:
+	case EUAVFlightState::Wayline:
+		return 0;
+	case EUAVFlightState::ReturnHome:
+	case EUAVFlightState::Landing:
+		return 2;
+	default:
+		return 5;
+	}
+}
+
+bool UUAVMqttBridgeComponent::IsDockInMission() const
+{
+	return DroneSim && DroneSim->GetFlightState() != EUAVFlightState::Idle;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
+{
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	if (!DroneSim)
+	{
+		// 未注入模拟组件：返回空 data，安全跳过（与无人机 OSD 一致）
+		return Data;
+	}
+
+	const bool bInDock = IsDroneInDock();
+	const bool bCharging = bInDock && DroneSim->GetBatteryCapacityPercent() < 100.0;
+	const int32 CapacityPercent = FMath::RoundToInt(DroneSim->GetBatteryCapacityPercent());
+	const int32 NowMillis = static_cast<int32>(FDateTime::UtcNow().ToUnixTimestamp() * 1000LL);
+	const FUAVGeoCoordinate Airport = DroneSim->AirportOrigin;
+
+	Data->SetStringField(TEXT("sn"), DockSn);
+	Data->SetNumberField(TEXT("mode_code"), IsDockInMission() ? 4 : 3);
+	Data->SetBoolField(TEXT("drone_in_dock"), bInDock);
+	Data->SetNumberField(TEXT("cover_state"), bInDock ? 0 : 1);
+	{
+		// 充电状态：归巢待命且电量未满为充电中（dock 口径）
+		const TSharedRef<FJsonObject> Charge = MakeShared<FJsonObject>();
+		Charge->SetNumberField(TEXT("capacity_percent"), CapacityPercent);
+		Charge->SetNumberField(TEXT("state"), bCharging ? 1 : 0);
+		Data->SetObjectField(TEXT("drone_charge_state"), Charge);
+	}
+	Data->SetNumberField(TEXT("flighttask_step_code"), GetFlightTaskStepCode());
+	Data->SetNumberField(TEXT("flighttask_prepare_capacity"), CapacityPercent);
+	Data->SetNumberField(TEXT("acc_time"), FMath::RoundToInt(DroneSim->GetTotalFlightTimeSeconds()));
+	Data->SetNumberField(TEXT("job_number"), 0);
+	Data->SetNumberField(TEXT("rainfall"), 0);
+	Data->SetNumberField(TEXT("wind_speed"), 3.0);
+	Data->SetNumberField(TEXT("environment_temperature"), 22.5);
+	Data->SetNumberField(TEXT("temperature"), 24.0);
+	Data->SetNumberField(TEXT("humidity"), 58);
+	Data->SetNumberField(TEXT("latitude"), Airport.Latitude);
+	Data->SetNumberField(TEXT("longitude"), Airport.Longitude);
+	Data->SetNumberField(TEXT("height"), 12.0);
+	{
+		// 备降点：机场附近偏移点（dock 基线）
+		const TSharedRef<FJsonObject> Alternate = MakeShared<FJsonObject>();
+		Alternate->SetNumberField(TEXT("latitude"), Airport.Latitude + 0.00012);
+		Alternate->SetNumberField(TEXT("longitude"), Airport.Longitude + 0.00010);
+		Alternate->SetNumberField(TEXT("safe_land_height"), 30.0);
+		Alternate->SetBoolField(TEXT("is_configured"), true);
+		Data->SetObjectField(TEXT("alternate_land_point"), Alternate);
+	}
+	Data->SetNumberField(TEXT("first_power_on"), NowMillis - 86400000LL * 180);
+	Data->SetNumberField(TEXT("activation_time"), NowMillis - 86400000LL * 120);
+	{
+		const TSharedRef<FJsonObject> Position = MakeShared<FJsonObject>();
+		Position->SetBoolField(TEXT("is_calibration"), false);
+		Position->SetNumberField(TEXT("gps_number"), 21);
+		Position->SetNumberField(TEXT("is_fixed"), 2);
+		Position->SetNumberField(TEXT("quality"), 5);
+		Position->SetNumberField(TEXT("rtk_number"), 17);
+		Data->SetObjectField(TEXT("position_state"), Position);
+	}
+	{
+		// 机库存储：total=512GB（MB），used 随录制时长递增
+		const TSharedRef<FJsonObject> Storage = MakeShared<FJsonObject>();
+		Storage->SetNumberField(TEXT("total"), 512 * 1024);
+		Storage->SetNumberField(TEXT("used"), FMath::Min(512.0 * 1024.0, 64000.0 + DroneSim->GetRecordingTimeSeconds() * 4.2));
+		Data->SetObjectField(TEXT("storage"), Storage);
+	}
+	Data->SetBoolField(TEXT("supplement_light_state"), false);
+	Data->SetBoolField(TEXT("emergency_stop_state"), false);
+	{
+		const TSharedRef<FJsonObject> AirConditioner = MakeShared<FJsonObject>();
+		AirConditioner->SetNumberField(TEXT("air_conditioner_state"), 0);
+		AirConditioner->SetNumberField(TEXT("switch_time"), 0);
+		Data->SetObjectField(TEXT("air_conditioner"), AirConditioner);
+	}
+	Data->SetNumberField(TEXT("battery_store_mode"), 1);
+	Data->SetBoolField(TEXT("alarm_state"), false);
+	Data->SetNumberField(TEXT("putter_state"), 0);
+	Data->SetNumberField(TEXT("electric_supply_voltage"), 220);
+	Data->SetNumberField(TEXT("working_voltage"), 24);
+	Data->SetNumberField(TEXT("working_current"), 3);
+	{
+		const TSharedRef<FJsonObject> Backup = MakeShared<FJsonObject>();
+		Backup->SetNumberField(TEXT("voltage"), 24000);
+		Backup->SetNumberField(TEXT("temperature"), 29.5);
+		Backup->SetBoolField(TEXT("switch"), true);
+		Data->SetObjectField(TEXT("backup_battery"), Backup);
+	}
+	{
+		const TSharedRef<FJsonObject> Maintenance = MakeShared<FJsonObject>();
+		Maintenance->SetNumberField(TEXT("maintenance_state"), 0);
+		Maintenance->SetNumberField(TEXT("maintenance_time_left"), 23);
+		Maintenance->SetNumberField(TEXT("heat_state"), 0);
+		Data->SetObjectField(TEXT("drone_battery_maintenance_info"), Maintenance);
+	}
+	{
+		const TSharedRef<FJsonObject> Media = MakeShared<FJsonObject>();
+		Media->SetNumberField(TEXT("remain_upload"), 0);
+		Data->SetObjectField(TEXT("media_file_detail"), Media);
+	}
+	{
+		// 子设备：对接无人机（M4TD）
+		const TSharedRef<FJsonObject> SubDevice = MakeShared<FJsonObject>();
+		SubDevice->SetStringField(TEXT("device_sn"), DroneSn);
+		SubDevice->SetStringField(TEXT("device_model_key"), TEXT("0-100-0"));
+		SubDevice->SetNumberField(TEXT("device_online_status"), 1);
+		SubDevice->SetNumberField(TEXT("device_paired"), 1);
+		Data->SetObjectField(TEXT("sub_device"), SubDevice);
+	}
+	{
+		// 网络状态：4G 在线全质量（dock 基线场景）
+		const TSharedRef<FJsonObject> Network = MakeShared<FJsonObject>();
+		Network->SetNumberField(TEXT("type"), 2);
+		Network->SetNumberField(TEXT("quality"), 5);
+		Network->SetNumberField(TEXT("rate"), 100.0);
+		Data->SetObjectField(TEXT("network_state"), Network);
+	}
+	{
+		// 图传链路：4G/SDR 双链路在线（dock 基线场景）
+		const TSharedRef<FJsonObject> Link = MakeShared<FJsonObject>();
+		Link->SetNumberField(TEXT("4g_freq_band"), 2.6);
+		Link->SetNumberField(TEXT("4g_gnd_quality"), 5);
+		Link->SetNumberField(TEXT("4g_link_state"), 1);
+		Link->SetNumberField(TEXT("4g_quality"), 5);
+		Link->SetNumberField(TEXT("4g_uav_quality"), 5);
+		Link->SetNumberField(TEXT("dongle_number"), 1);
+		Link->SetNumberField(TEXT("link_workmode"), 1);
+		Link->SetNumberField(TEXT("sdr_freq_band"), 5.8);
+		Link->SetNumberField(TEXT("sdr_link_state"), 1);
+		Link->SetNumberField(TEXT("sdr_quality"), 5);
+		Data->SetObjectField(TEXT("wireless_link"), Link);
+	}
+	Data->SetNumberField(TEXT("drc_state"), 0);
+	Data->SetNumberField(TEXT("user_experience_improvement"), 2);
+
+	return Data;
 }

@@ -192,6 +192,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
 	double GetBatteryCapacityPercent() const { return BatteryCapacityPercent; }
 
+	/** 设置当前电量百分比（0-100，越界自动钳制） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetBatteryCapacityPercent(double NewCapacityPercent) { BatteryCapacityPercent = FMath::Clamp(NewCapacityPercent, 0.0, 100.0); }
+
 	/** 降落电量阈值（%） */
 	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
 	double GetLandingPowerPercent() const { return BatteryLandingPowerPercent; }
