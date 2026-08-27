@@ -14,6 +14,8 @@ namespace UAV::CloudApi
 	const TCHAR* kTopicStateTemplate = TEXT("thing/product/{sn}/state");
 	const TCHAR* kTopicDrcDownTemplate = TEXT("thing/product/{sn}/drc/down");
 	const TCHAR* kTopicDrcUpTemplate = TEXT("thing/product/{sn}/drc/up");
+	const TCHAR* kTopicPropertySetTemplate = TEXT("thing/product/{sn}/property/set");
+	const TCHAR* kTopicPropertySetReplyTemplate = TEXT("thing/product/{sn}/property/set_reply");
 
 	// ---- 服务指令 method ----
 	const TCHAR* kMethodFlightAuthorityGrab = TEXT("flight_authority_grab");

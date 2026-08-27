@@ -21,6 +21,68 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVMqttConnectionChangedDelegate, b
 /** 收到 services 指令事件（调试/转发用；参数：method） */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVServiceCommandReceivedDelegate, const FString&, Method);
 
+/** 无人机可设置属性状态（物模型 property/set 驱动，OSD 联动输出；默认值对齐原 OSD 硬编码） */
+USTRUCT(BlueprintType)
+struct FUAVDroneProperties
+{
+	GENERATED_BODY()
+
+	/** 夜航灯开关（0=关 / 1=开） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 NightLightsState = 0;
+
+	/** 限高（米，20-1500） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 HeightLimit = 500;
+
+	/** 限远开关（0=关 / 1=开） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 DistanceLimitState = 1;
+
+	/** 限远距离（米，15-8000） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 DistanceLimit = 3000;
+
+	/** 是否接近限远距离 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	bool bIsNearDistanceLimit = false;
+
+	/** 水平避障（0=关 / 1=开） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 ObstacleHorizon = 1;
+
+	/** 上方避障（0=关 / 1=开） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 ObstacleUpside = 1;
+
+	/** 下方避障（0=关 / 1=开） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 ObstacleDownside = 1;
+
+	/** 失控动作（0=悬停 / 1=降落 / 2=返航，对齐 RcLostActionEnum） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 RcLostAction = 2;
+
+	/** 返航高度（米，20-500） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 RthAltitude = 60;
+
+	/** 失控时是否执行失控动作（0=继续航线 / 1=执行失控动作，对齐 ExitWaylineWhenRcLostEnum） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 ExitWaylineWhenRcLost = 1;
+};
+
+/** 机场可设置属性状态（物模型 property/set 驱动，机场 OSD 联动输出） */
+USTRUCT(BlueprintType)
+struct FUAVDockProperties
+{
+	GENERATED_BODY()
+
+	/** 用户体验改进计划（0/1/2，对齐 UserExperienceImprovementEnum） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Properties")
+	int32 UserExperienceImprovement = 2;
+};
+
 /**
  * MQTT 桥接组件：通过引擎自带 MQTTCore 插件连接 dock 的 MQTT broker，
  * 订阅 thing/product/{机场SN}/services 接收指令并分发到 UAVFlightControl /
@@ -50,6 +112,9 @@ public:
 
 	/** 组装机场 OSD data（对齐 dock OsdDock 完整字段；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildDockOsdPayload() const;
+
+	/** 组装无人机 OSD data（对齐 dock report_drone_osd.py；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildDroneOsdPayload() const;
 
 	/** 组装直播能力 data（data.live_capacity，对齐 dock DockLiveCapacity / report_live_capacity.py；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildLiveCapacityPayload() const;
@@ -101,6 +166,15 @@ public:
 
 	/** 组装载荷固件版本 state data（对齐 dock PayloadFirmwareVersion：data={载荷索引:{firmware_version}}；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildPayloadFirmwareVersionData() const;
+
+	/** 组装 property/set_reply 回执报文（对齐 dock TopicPropertySetResponse：{tid, bid, timestamp, data:{result}}，无 method；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildPropertySetReply(const FString& InTid, const FString& InBid, int32 InResult) const;
+
+	/** 处理物模型属性设置：解析 data 单属性对象并按属性名校验，写入属性状态，返回 result（0=成功 / 1=失败，对齐 PropertySetReplyResultEnum；自动化测试入口） */
+	int32 HandlePropertySet(const FString& InDataJson);
+
+	/** 解析 property/set 报文（tid/bid/data 单属性）并分发属性设置，回发 property/set_reply（InSn 为报文来源设备 SN，空则回退机场 SN；自动化测试入口） */
+	void DispatchPropertySetMessage(const FString& InPayloadJson, const FString& InSn = FString());
 
 	// ---- 配置（默认值对齐 dock 联调环境） ----
 	/** Broker 地址 */
@@ -183,12 +257,18 @@ protected:
 	UFUNCTION()
 	void OnDrcMessage(const FMQTTClientMessage& InMessage);
 
+	UFUNCTION()
+	void OnPropertySetMessage(const FMQTTClientMessage& InMessage);
+
 	// ---- 指令分发 ----
 	/** 解析 services 报文并按 method 分发到飞控/相机，回发 services_reply（InSn 为报文来源设备 SN，空则回退机场 SN） */
 	void DispatchServicesMessage(const FString& InPayloadJson, const FString& InSn = FString());
 
 	/** 解析 drc/down 报文并按 method 分发到飞控，回发 drc/up（InSn 为报文来源设备 SN，空则回退机场 SN） */
 	void DispatchDrcMessage(const FString& InPayloadJson, const FString& InSn = FString());
+
+	/** 发布 property/set_reply 回执（thing/product/{sn}/property/set_reply，InSn 空则用机场 SN；报文头含 tid/bid/timestamp，无 method，对齐 TopicPropertySetResponse） */
+	void PublishPropertySetReply(const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn = FString());
 
 	// ---- 发布 ----
 	/** 发布 services_reply（thing/product/{sn}/services_reply，InSn 空则用机场 SN；InOutput 非空时 data 附带 output 字段，如远程调试成功回执 {status:"sent"}） */
@@ -259,9 +339,6 @@ protected:
 	void OnDrcStatusNotify(int32 InDrcState);
 
 	// ---- OSD 组装 ----
-	/** 从无人机模拟组件读取遥测，组装无人机 OSD data（对齐 dock report_drone_osd.py） */
-	TSharedPtr<FJsonObject> BuildDroneOsdPayload() const;
-
 	/** 飞行状态 → 上云 API mode_code */
 	int32 FlightStateToModeCode(EUAVFlightState InState) const;
 
@@ -300,12 +377,25 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMQTTSubscriptionObject> DrcSubscription;
 
+	/** property/set 订阅对象 */
+	UPROPERTY(Transient)
+	TObjectPtr<UMQTTSubscriptionObject> PropertySetSubscription;
+
 	/** 已连接 */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge", meta = (AllowPrivateAccess = "true"))
 	bool bConnected = false;
 
 	/** OSD 周期计时累加器（秒） */
 	double OsdAccumulator = 0.0;
+
+	// ---- 物模型属性状态（property/set 指令驱动，OSD 联动输出）----
+	/** 无人机可设置属性状态 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge", meta = (AllowPrivateAccess = "true"))
+	FUAVDroneProperties DroneProperties;
+
+	/** 机场可设置属性状态 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge", meta = (AllowPrivateAccess = "true"))
+	FUAVDockProperties DockProperties;
 
 	// ---- 机场设备模拟状态（远程调试指令驱动，OSD 联动输出）----
 	/** 调试模式已激活（debug_mode_open/close） */

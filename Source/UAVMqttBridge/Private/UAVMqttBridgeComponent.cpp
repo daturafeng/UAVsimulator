@@ -66,6 +66,21 @@ namespace
 	}
 
 	/**
+	 * 从 property/set topic（thing/product/{sn}/property/set）提取设备 SN。
+	 * 提取失败返回空串，由调用方回退默认 SN。
+	 */
+	FString ParseSnFromPropertySetTopic(const FString& InTopic)
+	{
+		const FString Prefix = TEXT("thing/product/");
+		const FString Suffix = TEXT("/property/set");
+		if (InTopic.StartsWith(Prefix) && InTopic.EndsWith(Suffix))
+		{
+			return InTopic.Mid(Prefix.Len(), InTopic.Len() - Prefix.Len() - Suffix.Len());
+		}
+		return FString();
+	}
+
+	/**
 	 * flighttask_progress 状态 → WaylineMissionStateEnum（对齐 dock 枚举：5=到达首航点、6=执行中、9=结束）。
 	 * 终态（ok/failed/canceled/timeout/partially_done 等）统一映射为 9。
 	 */
@@ -308,6 +323,7 @@ void UUAVMqttBridgeComponent::Disconnect()
 	MqttClient = nullptr;
 	ServicesSubscription = nullptr;
 	DrcSubscription = nullptr;
+	PropertySetSubscription = nullptr;
 	bConnected = false;
 }
 
@@ -336,6 +352,16 @@ void UUAVMqttBridgeComponent::OnMqttConnect(EMQTTConnectReturnCode ReturnCode)
 			UMQTTSubscriptionObject::FOnMessageDelegate DrcDelegate;
 			DrcDelegate.BindUFunction(this, TEXT("OnDrcMessage"));
 			DrcSubscription->SetOnMessageHandler(DrcDelegate);
+		}
+
+		// 订阅机场物模型属性设置 topic（thing/product/{sn}/property/set）
+		const FString PropertySetTopic = MakeTopic(kTopicPropertySetTemplate, DockSn);
+		PropertySetSubscription = MqttClient->Subscribe(PropertySetTopic, EMQTTQualityOfService::Once);
+		if (PropertySetSubscription)
+		{
+			UMQTTSubscriptionObject::FOnMessageDelegate PropertySetDelegate;
+			PropertySetDelegate.BindUFunction(this, TEXT("OnPropertySetMessage"));
+			PropertySetSubscription->SetOnMessageHandler(PropertySetDelegate);
 		}
 
 		// 上报上线状态
@@ -396,6 +422,18 @@ void UUAVMqttBridgeComponent::OnDrcMessage(const FMQTTClientMessage& InMessage)
 	// 提取报文来源设备 SN（topic 形如 thing/product/{sn}/drc/down）
 	const FString SourceSn = ParseSnFromDrcTopic(InMessage.Topic);
 	DispatchDrcMessage(PayloadJson, SourceSn);
+}
+
+void UUAVMqttBridgeComponent::OnPropertySetMessage(const FMQTTClientMessage& InMessage)
+{
+	const FString& PayloadJson = InMessage.GetPayloadAsString();
+	if (PayloadJson.IsEmpty())
+	{
+		return;
+	}
+	// 提取报文来源设备 SN（topic 形如 thing/product/{sn}/property/set）
+	const FString SourceSn = ParseSnFromPropertySetTopic(InMessage.Topic);
+	DispatchPropertySetMessage(PayloadJson, SourceSn);
 }
 
 void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJson, const FString& InSn)
@@ -560,6 +598,256 @@ void UUAVMqttBridgeComponent::DispatchDrcMessage(const FString& InPayloadJson, c
 
 	// 回发 drc/up 回执（按来源设备 SN，缺省回退机场 SN）
 	PublishDrcUpReply(Method, Tid, Bid, Result, InSn);
+}
+
+void UUAVMqttBridgeComponent::DispatchPropertySetMessage(const FString& InPayloadJson, const FString& InSn)
+{
+	TSharedPtr<FJsonObject> Root;
+	if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InPayloadJson), Root) || !Root.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] property/set 报文解析失败: %s"), *InPayloadJson);
+		return;
+	}
+
+	const FString Tid = Root->GetStringField(TEXT("tid"));
+	const FString Bid = Root->GetStringField(TEXT("bid"));
+	FString DataJson;
+	if (Root->HasField(TEXT("data")))
+	{
+		const TSharedPtr<FJsonObject> DataObj = Root->GetObjectField(TEXT("data"));
+		if (DataObj.IsValid())
+		{
+			DataJson = SerializeJson(DataObj.ToSharedRef());
+		}
+	}
+
+	// 缺 data 视为参数非法（对齐 PropertySetReplyResultEnum.FAILED）
+	const int32 Result = DataJson.IsEmpty() ? 1 : HandlePropertySet(DataJson);
+
+	// 回发 property/set_reply 回执（按来源设备 SN，缺省回退机场 SN）
+	PublishPropertySetReply(Tid, Bid, Result, InSn);
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildPropertySetReply(const FString& InTid, const FString& InBid, int32 InResult) const
+{
+	// property/set_reply 报文头含 tid/bid/timestamp，无 method（对齐 dock TopicPropertySetResponse）
+	TSharedRef<FJsonObject> Reply = MakeShared<FJsonObject>();
+	Reply->SetStringField(TEXT("tid"), InTid.IsEmpty() ? NewUuid() : InTid);
+	Reply->SetStringField(TEXT("bid"), InBid.IsEmpty() ? NewUuid() : InBid);
+	Reply->SetNumberField(TEXT("timestamp"), static_cast<double>(NowTimestampMs()));
+	TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), InResult);
+	Reply->SetObjectField(TEXT("data"), Data);
+	return Reply;
+}
+
+void UUAVMqttBridgeComponent::PublishPropertySetReply(const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn)
+{
+	if (!MqttClient || !bConnected)
+	{
+		return;
+	}
+	const TSharedRef<FJsonObject> Reply = BuildPropertySetReply(InTid, InBid, InResult).ToSharedRef();
+
+	const FString TargetSn = InSn.IsEmpty() ? DockSn : InSn;
+	const FString Topic = MakeTopic(kTopicPropertySetReplyTemplate, TargetSn);
+	const FString Json = SerializeJson(Reply);
+	if (!Json.IsEmpty())
+	{
+		FMQTTClientMessage Msg;
+		Msg.Topic = Topic;
+		Msg.SetPayloadFromString(Json);
+		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 属性设置回执 -> result=%d"), InResult);
+	}
+}
+
+int32 UUAVMqttBridgeComponent::HandlePropertySet(const FString& InDataJson)
+{
+	TSharedPtr<FJsonObject> Data;
+	if (InDataJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] property/set data 解析失败: %s"), *InDataJson);
+		return 1;
+	}
+
+	// 物模型一次设置一个属性：取 data 第一个属性键
+	FString PropertyName;
+	TSharedPtr<FJsonObject> PropertyValue;
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Data->Values)
+	{
+		PropertyName = Pair.Key;
+		PropertyValue = Pair.Value->AsObject();
+		break;
+	}
+	if (PropertyName.IsEmpty() || !PropertyValue.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] property/set data 缺属性对象"));
+		return 1;
+	}
+
+	// 夜航灯开关（0=关 / 1=开，对齐 SwitchActionEnum）
+	if (PropertyName == TEXT("night_lights_state"))
+	{
+		if (!PropertyValue->HasField(TEXT("night_lights_state")))
+		{
+			return 1;
+		}
+		const int32 Value = static_cast<int32>(PropertyValue->GetNumberField(TEXT("night_lights_state")));
+		if (Value != 0 && Value != 1)
+		{
+			return 1;
+		}
+		DroneProperties.NightLightsState = Value;
+		return 0;
+	}
+	// 限高（20-1500 米）
+	if (PropertyName == TEXT("height_limit"))
+	{
+		if (!PropertyValue->HasField(TEXT("height_limit")))
+		{
+			return 1;
+		}
+		const int32 Value = static_cast<int32>(PropertyValue->GetNumberField(TEXT("height_limit")));
+		if (Value < 20 || Value > 1500)
+		{
+			return 1;
+		}
+		DroneProperties.HeightLimit = Value;
+		return 0;
+	}
+	// 限远状态：state（0/1）与 distance_limit（15-8000）至少一项存在
+	if (PropertyName == TEXT("distance_limit_status"))
+	{
+		const bool bHasState = PropertyValue->HasField(TEXT("state"));
+		const bool bHasDistance = PropertyValue->HasField(TEXT("distance_limit"));
+		if (!bHasState && !bHasDistance)
+		{
+			return 1;
+		}
+		if (bHasState)
+		{
+			const int32 State = static_cast<int32>(PropertyValue->GetNumberField(TEXT("state")));
+			if (State != 0 && State != 1)
+			{
+				return 1;
+			}
+			DroneProperties.DistanceLimitState = State;
+		}
+		if (bHasDistance)
+		{
+			const int32 Distance = static_cast<int32>(PropertyValue->GetNumberField(TEXT("distance_limit")));
+			if (Distance < 15 || Distance > 8000)
+			{
+				return 1;
+			}
+			DroneProperties.DistanceLimit = Distance;
+		}
+		return 0;
+	}
+	// 避障：horizon/upside/downside（0/1）至少一项存在
+	if (PropertyName == TEXT("obstacle_avoidance"))
+	{
+		const bool bHasHorizon = PropertyValue->HasField(TEXT("horizon"));
+		const bool bHasUpside = PropertyValue->HasField(TEXT("upside"));
+		const bool bHasDownside = PropertyValue->HasField(TEXT("downside"));
+		if (!bHasHorizon && !bHasUpside && !bHasDownside)
+		{
+			return 1;
+		}
+		if (bHasHorizon)
+		{
+			const int32 Horizon = static_cast<int32>(PropertyValue->GetNumberField(TEXT("horizon")));
+			if (Horizon != 0 && Horizon != 1)
+			{
+				return 1;
+			}
+			DroneProperties.ObstacleHorizon = Horizon;
+		}
+		if (bHasUpside)
+		{
+			const int32 Upside = static_cast<int32>(PropertyValue->GetNumberField(TEXT("upside")));
+			if (Upside != 0 && Upside != 1)
+			{
+				return 1;
+			}
+			DroneProperties.ObstacleUpside = Upside;
+		}
+		if (bHasDownside)
+		{
+			const int32 Downside = static_cast<int32>(PropertyValue->GetNumberField(TEXT("downside")));
+			if (Downside != 0 && Downside != 1)
+			{
+				return 1;
+			}
+			DroneProperties.ObstacleDownside = Downside;
+		}
+		return 0;
+	}
+	// 返航高度（20-500 米）
+	if (PropertyName == TEXT("rth_altitude"))
+	{
+		if (!PropertyValue->HasField(TEXT("rth_altitude")))
+		{
+			return 1;
+		}
+		const int32 Value = static_cast<int32>(PropertyValue->GetNumberField(TEXT("rth_altitude")));
+		if (Value < 20 || Value > 500)
+		{
+			return 1;
+		}
+		DroneProperties.RthAltitude = Value;
+		return 0;
+	}
+	// 失控动作（0=悬停 / 1=降落 / 2=返航，对齐 RcLostActionEnum）
+	if (PropertyName == TEXT("rc_lost_action"))
+	{
+		if (!PropertyValue->HasField(TEXT("rc_lost_action")))
+		{
+			return 1;
+		}
+		const int32 Value = static_cast<int32>(PropertyValue->GetNumberField(TEXT("rc_lost_action")));
+		if (Value < 0 || Value > 2)
+		{
+			return 1;
+		}
+		DroneProperties.RcLostAction = Value;
+		return 0;
+	}
+	// 失控时是否执行失控动作（0=继续航线 / 1=执行失控动作，对齐 ExitWaylineWhenRcLostEnum）
+	if (PropertyName == TEXT("exit_wayline_when_rc_lost"))
+	{
+		if (!PropertyValue->HasField(TEXT("exit_wayline_when_rc_lost")))
+		{
+			return 1;
+		}
+		const int32 Value = static_cast<int32>(PropertyValue->GetNumberField(TEXT("exit_wayline_when_rc_lost")));
+		if (Value != 0 && Value != 1)
+		{
+			return 1;
+		}
+		DroneProperties.ExitWaylineWhenRcLost = Value;
+		return 0;
+	}
+	// 机场：用户体验改进计划（0/1/2，对齐 UserExperienceImprovementEnum）
+	if (PropertyName == TEXT("user_experience_improvement"))
+	{
+		if (!PropertyValue->HasField(TEXT("user_experience_improvement")))
+		{
+			return 1;
+		}
+		const int32 Value = static_cast<int32>(PropertyValue->GetNumberField(TEXT("user_experience_improvement")));
+		if (Value < 0 || Value > 2)
+		{
+			return 1;
+		}
+		DockProperties.UserExperienceImprovement = Value;
+		return 0;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] property/set 未知属性: %s"), *PropertyName);
+	return 1;
 }
 
 void UUAVMqttBridgeComponent::PublishServicesReply(const FString& InMethod, const FString& InTid, const FString& InBid, int32 InResult, const FString& InSn, const TSharedPtr<FJsonObject>& InOutput)
@@ -1013,29 +1301,29 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDroneOsdPayload() const
 		Storage->SetNumberField(TEXT("used"), FMath::Min(131072.0 - 8192.0, DroneSim->GetRecordingTimeSeconds() * 4.2));
 		Data->SetObjectField(TEXT("storage"), Storage);
 	}
-	Data->SetNumberField(TEXT("night_lights_state"), DroneSim->IsRecording() ? 1 : 0);
-	Data->SetNumberField(TEXT("height_limit"), 500);
+	Data->SetNumberField(TEXT("night_lights_state"), DroneProperties.NightLightsState);
+	Data->SetNumberField(TEXT("height_limit"), DroneProperties.HeightLimit);
 	{
 		const TSharedRef<FJsonObject> DistanceLimit = MakeShared<FJsonObject>();
-		DistanceLimit->SetNumberField(TEXT("state"), 1);
-		DistanceLimit->SetNumberField(TEXT("distance_limit"), 3000);
-		DistanceLimit->SetBoolField(TEXT("is_near_distance_limit"), false);
+		DistanceLimit->SetNumberField(TEXT("state"), DroneProperties.DistanceLimitState);
+		DistanceLimit->SetNumberField(TEXT("distance_limit"), DroneProperties.DistanceLimit);
+		DistanceLimit->SetBoolField(TEXT("is_near_distance_limit"), DroneProperties.bIsNearDistanceLimit);
 		Data->SetObjectField(TEXT("distance_limit_status"), DistanceLimit);
 	}
 	{
 		const TSharedRef<FJsonObject> Obstacle = MakeShared<FJsonObject>();
-		Obstacle->SetNumberField(TEXT("horizon"), 1);
-		Obstacle->SetNumberField(TEXT("upside"), 1);
-		Obstacle->SetNumberField(TEXT("downside"), 1);
+		Obstacle->SetNumberField(TEXT("horizon"), DroneProperties.ObstacleHorizon);
+		Obstacle->SetNumberField(TEXT("upside"), DroneProperties.ObstacleUpside);
+		Obstacle->SetNumberField(TEXT("downside"), DroneProperties.ObstacleDownside);
 		Data->SetObjectField(TEXT("obstacle_avoidance"), Obstacle);
 	}
 	Data->SetNumberField(TEXT("activation_time"),
 		FDateTime::UtcNow().ToUnixTimestamp() * 1000LL - 86400000LL * 90);
-	Data->SetNumberField(TEXT("rc_lost_action"), 2);
-	Data->SetNumberField(TEXT("rth_altitude"), 60);
+	Data->SetNumberField(TEXT("rc_lost_action"), DroneProperties.RcLostAction);
+	Data->SetNumberField(TEXT("rth_altitude"), DroneProperties.RthAltitude);
 	Data->SetNumberField(TEXT("total_flight_sorties"),
 		FMath::Max(1, FMath::FloorToInt(DroneSim->GetTotalFlightTimeSeconds() / 600.0) + 1));
-	Data->SetNumberField(TEXT("exit_wayline_when_rc_lost"), 1);
+	Data->SetNumberField(TEXT("exit_wayline_when_rc_lost"), DroneProperties.ExitWaylineWhenRcLost);
 	Data->SetStringField(TEXT("country"), TEXT("CN"));
 	Data->SetBoolField(TEXT("rid_state"), false);
 	Data->SetBoolField(TEXT("is_near_area_limit"), false);
@@ -1804,7 +2092,7 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
 		Data->SetObjectField(TEXT("wireless_link"), Link);
 	}
 	Data->SetNumberField(TEXT("drc_state"), 0);
-	Data->SetNumberField(TEXT("user_experience_improvement"), 2);
+	Data->SetNumberField(TEXT("user_experience_improvement"), DockProperties.UserExperienceImprovement);
 
 	return Data;
 }

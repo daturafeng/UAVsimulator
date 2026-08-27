@@ -18,6 +18,8 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kTopicStateTemplate;			// thing/product/{sn}/state
 	UAVCORE_API extern const TCHAR* kTopicDrcDownTemplate;			// thing/product/{sn}/drc/down（云端 → 设备 DRC 指令）
 	UAVCORE_API extern const TCHAR* kTopicDrcUpTemplate;			// thing/product/{sn}/drc/up（设备 → 云端 DRC 回执）
+	UAVCORE_API extern const TCHAR* kTopicPropertySetTemplate;		// thing/product/{sn}/property/set（云端 → 设备物模型属性设置）
+	UAVCORE_API extern const TCHAR* kTopicPropertySetReplyTemplate;	// thing/product/{sn}/property/set_reply（设备 → 云端属性设置回执）
 
 	// ---- 服务指令 method ----
 	UAVCORE_API extern const TCHAR* kMethodFlightAuthorityGrab;		// flight_authority_grab
