@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "UAVGeoUtils.h"
+#include "UAVPayloadMath.h"
 #include "UAVDroneSimComponent.generated.h"
 
 /** 无人机飞行状态（与上云 API mode_code 的映射由 OSD 层负责） */
@@ -53,6 +54,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVWaypointReachedDelegate, int32, 
 /** 全部航点执行完毕（或直接移动到达）时广播 */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FUAVMissionFinishedDelegate);
 
+/** 电量首次低于返航阈值时广播（参数：当前电量百分比） */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVBatteryLowDelegate, double, CapacityPercent);
+
 /**
  * 无人机模拟组件：维护航点队列、位置、朝向与速度，
  * 由飞控指令（UAVFlightControl）驱动，按"航点 + 速度矢量"模型平滑移动。
@@ -82,6 +86,49 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Config", meta = (ClampMin = "0.1"))
 	double DefaultArrivalThresholdMeters = 1.5;
 
+	// ---- 载荷配置：电量 ----
+	/** 初始电量百分比（0-100） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	double BatteryCapacityStartPercent = 100.0;
+
+	/** 飞行状态电量消耗速率（%/秒） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "0.0"))
+	double BatteryDrainPercentPerSecond = 0.05;
+
+	/** 待机状态电量消耗速率（%/秒） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "0.0"))
+	double BatteryIdleDrainPercentPerSecond = 0.005;
+
+	/** 降落电量阈值（%，OSD landing_power，对齐 dock=20） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	double BatteryLandingPowerPercent = 20.0;
+
+	/** 返航电量阈值（%，OSD return_home_power 与低电量事件阈值，对齐 dock=25） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	double BatteryReturnHomePowerPercent = 25.0;
+
+	// ---- 载荷配置：云台 ----
+	/** 云台模拟参数（俯仰/横滚/偏航） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload")
+	FUAVGimbalConfig GimbalConfig;
+
+	// ---- 载荷配置：相机 ----
+	/** 相机模式：0 拍照 / 1 录像（对齐 dock int 枚举） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "0", ClampMax = "1"))
+	int32 CameraMode = 1;
+
+	/** 变焦倍率下限 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "1.0"))
+	double ZoomFactorMin = 1.0;
+
+	/** 变焦倍率上限 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "1.0"))
+	double ZoomFactorMax = 7.0;
+
+	/** 初始变焦倍率（对齐 dock 3.0 基线） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Payload", meta = (ClampMin = "1.0"))
+	double DefaultZoomFactor = 3.0;
+
 	// ---- 事件 ----
 	/** 到达航点事件（参数：航点索引） */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|Event")
@@ -90,6 +137,10 @@ public:
 	/** 任务完成事件（全部航点执行完毕或直接移动到达） */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|Event")
 	FUAVMissionFinishedDelegate OnMissionFinished;
+
+	/** 低电量事件（电量首次低于返航阈值时广播） */
+	UPROPERTY(BlueprintAssignable, Category = "UAV|Payload|Event")
+	FUAVBatteryLowDelegate OnBatteryLow;
 
 	// ---- 遥测查询 ----
 	/** 当前飞行状态 */
@@ -135,6 +186,75 @@ public:
 	/** 是否有进行中的任务（航线或直接移动） */
 	UFUNCTION(BlueprintPure, Category = "UAV|Telemetry")
 	bool HasActiveMission() const { return bMissionActive; }
+
+	// ---- 载荷遥测 ----
+	/** 当前电量百分比（0-100） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetBatteryCapacityPercent() const { return BatteryCapacityPercent; }
+
+	/** 降落电量阈值（%） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetLandingPowerPercent() const { return BatteryLandingPowerPercent; }
+
+	/** 返航电量阈值（%） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetReturnHomePowerPercent() const { return BatteryReturnHomePowerPercent; }
+
+	/** 剩余飞行时间（秒，按飞行消耗速率估算） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetRemainFlightTimeSeconds() const;
+
+	/** 电池单元温度/电压（index 0/1，对齐 dock 双电池口径） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	void GetBatteryCell(int32 InIndex, double& OutTemperatureCelsius, int32& OutVoltageMv) const;
+
+	/** 云台角度状态 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	FUAVGimbalState GetGimbalState() const { return GimbalState; }
+
+	/** 云台俯仰角（度） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetGimbalPitchDegrees() const { return GimbalState.PitchDegrees; }
+
+	/** 云台横滚角（度） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetGimbalRollDegrees() const { return GimbalState.RollDegrees; }
+
+	/** 云台偏航角（度） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetGimbalYawDegrees() const { return GimbalState.YawDegrees; }
+
+	/** 相机模式（0 拍照 / 1 录像） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	int32 GetCameraMode() const { return CameraMode; }
+
+	/** 设置相机模式（钳制到 0/1） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetCameraMode(int32 NewMode);
+
+	/** 当前变焦倍率 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetZoomFactor() const { return ZoomFactor; }
+
+	/** 设置变焦倍率（钳制到配置范围） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetZoomFactor(double NewZoomFactor);
+
+	/** 是否录像中（起飞/航线/返航状态，对齐 dock 模式编码集合） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	bool IsRecording() const;
+
+	/** 累计飞行距离（米） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetTotalFlightDistanceMeters() const { return TotalFlightDistanceMeters; }
+
+	/** 累计飞行时长（秒） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetTotalFlightTimeSeconds() const { return TotalFlightTimeSeconds; }
+
+	/** 累计录制时长（秒） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetRecordingTimeSeconds() const { return RecordingTimeSeconds; }
 
 	/** 航点数量 */
 	UFUNCTION(BlueprintPure, Category = "UAV|Telemetry")
@@ -232,4 +352,36 @@ private:
 	/** 当前朝向（度，0=北、顺时针） */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|Telemetry", meta = (AllowPrivateAccess = "true"))
 	double HeadingDegrees = 0.0;
+
+	/** 当前电量百分比 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double BatteryCapacityPercent = 100.0;
+
+	/** 模拟累计秒（云台微动时间源） */
+	UPROPERTY()
+	double ElapsedSimTimeSeconds = 0.0;
+
+	/** 云台角度状态 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	FUAVGimbalState GimbalState;
+
+	/** 当前变焦倍率 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double ZoomFactor = 3.0;
+
+	/** 累计飞行距离（米） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double TotalFlightDistanceMeters = 0.0;
+
+	/** 累计飞行时长（秒） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double TotalFlightTimeSeconds = 0.0;
+
+	/** 累计录制时长（秒） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double RecordingTimeSeconds = 0.0;
+
+	/** 低电量事件已触发标志（回升后复位） */
+	UPROPERTY()
+	bool bBatteryLowEventFired = false;
 };

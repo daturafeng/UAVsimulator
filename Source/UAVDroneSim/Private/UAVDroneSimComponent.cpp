@@ -27,6 +27,8 @@ void UUAVDroneSimComponent::BeginPlay()
 		CurrentLocation = Owner->GetActorLocation();
 		TargetLocation = CurrentLocation;
 	}
+	BatteryCapacityPercent = BatteryCapacityStartPercent;
+	ZoomFactor = DefaultZoomFactor;
 }
 
 FUAVGeoCoordinate UUAVDroneSimComponent::GetCurrentGeoCoordinate() const
@@ -179,6 +181,38 @@ double UUAVDroneSimComponent::GetArrivalThreshold() const
 	return DefaultArrivalThresholdMeters;
 }
 
+double UUAVDroneSimComponent::GetRemainFlightTimeSeconds() const
+{
+	return UAVPayloadMath::EstimateRemainFlightTimeSeconds(BatteryCapacityPercent, BatteryDrainPercentPerSecond);
+}
+
+void UUAVDroneSimComponent::GetBatteryCell(int32 InIndex, double& OutTemperatureCelsius, int32& OutVoltageMv) const
+{
+	// 对齐 dock 双电池：第二单元温度 +0.5、电压 -80
+	OutTemperatureCelsius = UAVPayloadMath::ComputeBatteryTemperatureCelsius(BatteryCapacityPercent, CurrentHorizontalSpeed)
+		+ (InIndex == 1 ? 0.5 : 0.0);
+	OutVoltageMv = UAVPayloadMath::ComputeBatteryVoltageMv(BatteryCapacityPercent, CurrentHorizontalSpeed)
+		+ (InIndex == 1 ? -80 : 0);
+}
+
+void UUAVDroneSimComponent::SetCameraMode(int32 NewMode)
+{
+	CameraMode = FMath::Clamp(NewMode, 0, 1);
+}
+
+void UUAVDroneSimComponent::SetZoomFactor(double NewZoomFactor)
+{
+	ZoomFactor = FMath::Clamp(NewZoomFactor, ZoomFactorMin, FMath::Max(ZoomFactorMin, ZoomFactorMax));
+}
+
+bool UUAVDroneSimComponent::IsRecording() const
+{
+	// 对齐 dock：模式编码 ∈ {1,4,9} 即 起飞/航线/返航 时录像中
+	return FlightState == EUAVFlightState::TakingOff
+		|| FlightState == EUAVFlightState::Wayline
+		|| FlightState == EUAVFlightState::ReturnHome;
+}
+
 void UUAVDroneSimComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
@@ -186,6 +220,34 @@ void UUAVDroneSimComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	if (DeltaTime <= 0.0f)
 	{
 		return;
+	}
+
+	// ---- 载荷状态推进（与移动状态无关） ----
+	const bool bInFlight = (FlightState != EUAVFlightState::Idle);
+	BatteryCapacityPercent = UAVPayloadMath::DrainBatteryPercent(
+		BatteryCapacityPercent, bInFlight, DeltaTime, BatteryDrainPercentPerSecond, BatteryIdleDrainPercentPerSecond);
+	if (!bBatteryLowEventFired && BatteryCapacityPercent <= BatteryReturnHomePowerPercent)
+	{
+		bBatteryLowEventFired = true;
+		OnBatteryLow.Broadcast(BatteryCapacityPercent);
+	}
+	else if (bBatteryLowEventFired && BatteryCapacityPercent > BatteryReturnHomePowerPercent)
+	{
+		// 电量回升后复位，允许再次触发
+		bBatteryLowEventFired = false;
+	}
+
+	ElapsedSimTimeSeconds += DeltaTime;
+	GimbalState = UAVPayloadMath::ComputeGimbalState(HeadingDegrees, ElapsedSimTimeSeconds, GimbalConfig);
+
+	if (bMissionActive && !bMissionPaused)
+	{
+		TotalFlightTimeSeconds += DeltaTime;
+		TotalFlightDistanceMeters += CurrentHorizontalSpeed * DeltaTime;
+		if (IsRecording())
+		{
+			RecordingTimeSeconds += DeltaTime;
+		}
 	}
 
 	// 无进行中任务或已暂停：位置保持，速度归零

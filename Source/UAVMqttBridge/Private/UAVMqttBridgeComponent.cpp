@@ -14,6 +14,9 @@
 #include "UAVCloudApiTypes.h"
 #include "UAVDroneSimComponent.h"
 #include "UAVFlightControlComponent.h"
+#include "UAVPayloadMath.h"
+
+#include "Misc/DateTime.h"
 
 // 上云 API 报文工具位于 UAV::CloudApi 命名空间，统一引入
 using namespace UAV::CloudApi;
@@ -484,45 +487,130 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDroneOsdPayload() const
 	Data->SetNumberField(TEXT("vertical_speed"), DroneSim->GetVerticalSpeed());
 	Data->SetNumberField(TEXT("home_distance"), DroneSim->GetRemainingMissionDistance());
 
-	// 电量（默认演示值，首期联调口径）
+	// 电量（双电池，数值由 UAVDroneSim 载荷状态推导，对齐 dock report_drone_osd.py）
 	const TSharedRef<FJsonObject> Battery = MakeShared<FJsonObject>();
-	const TSharedRef<FJsonObject> SingleBattery = MakeShared<FJsonObject>();
-	SingleBattery->SetNumberField(TEXT("index"), 0);
-	SingleBattery->SetNumberField(TEXT("temperature"), 0.0);
-	SingleBattery->SetNumberField(TEXT("voltage"), 0.0);
-	Battery->SetArrayField(TEXT("batteries"), { MakeShared<FJsonValueObject>(SingleBattery) });
-	Battery->SetNumberField(TEXT("capacity_percent"), 100.0);
-	Battery->SetNumberField(TEXT("landing_power"), 0.0);
-	Battery->SetNumberField(TEXT("remain_flight_time"), 0.0);
-	Battery->SetNumberField(TEXT("return_home_power"), 0.0);
+	{
+		TArray<TSharedPtr<FJsonValue>> BatteryCells;
+		for (int32 CellIndex = 0; CellIndex < 2; ++CellIndex)
+		{
+			double TemperatureCelsius = 0.0;
+			int32 VoltageMv = 0;
+			DroneSim->GetBatteryCell(CellIndex, TemperatureCelsius, VoltageMv);
+			const TSharedRef<FJsonObject> Cell = MakeShared<FJsonObject>();
+			Cell->SetNumberField(TEXT("index"), CellIndex);
+			Cell->SetNumberField(TEXT("temperature"), TemperatureCelsius);
+			Cell->SetNumberField(TEXT("voltage"), VoltageMv);
+			BatteryCells.Add(MakeShared<FJsonValueObject>(Cell));
+		}
+		Battery->SetArrayField(TEXT("batteries"), BatteryCells);
+	}
+	Battery->SetNumberField(TEXT("capacity_percent"), FMath::RoundToInt(DroneSim->GetBatteryCapacityPercent()));
+	Battery->SetNumberField(TEXT("landing_power"), DroneSim->GetLandingPowerPercent());
+	Battery->SetNumberField(TEXT("remain_flight_time"), DroneSim->GetRemainFlightTimeSeconds());
+	Battery->SetNumberField(TEXT("return_home_power"), DroneSim->GetReturnHomePowerPercent());
 	Data->SetObjectField(TEXT("battery"), Battery);
 
-	Data->SetStringField(TEXT("firmware_version"), TEXT("00.00.0000"));
+	Data->SetStringField(TEXT("firmware_version"), TEXT("12.03.0100"));
 
-	// 载荷（云台 + 变焦）
+	// 载荷（云台角度与变焦，读取 UAVDroneSim 模拟状态）
+	const FUAVGimbalState Gimbal = DroneSim->GetGimbalState();
+	UUAVDroneSimComponent* Sim = DroneSim;
 	const TArray<TSharedPtr<FJsonValue>> Payloads = { MakeShared<FJsonValueObject>(
-		[]() {
+		[&Gimbal, Sim]() {
 			const TSharedRef<FJsonObject> P = MakeShared<FJsonObject>();
 			P->SetNumberField(TEXT("payload_index"), 0);
-			P->SetNumberField(TEXT("gimbal_pitch"), 0.0);
-			P->SetNumberField(TEXT("gimbal_roll"), 0.0);
-			P->SetNumberField(TEXT("gimbal_yaw"), 0.0);
-			P->SetNumberField(TEXT("zoom_factor"), 1.0);
+			P->SetNumberField(TEXT("gimbal_pitch"), Gimbal.PitchDegrees);
+			P->SetNumberField(TEXT("gimbal_roll"), Gimbal.RollDegrees);
+			P->SetNumberField(TEXT("gimbal_yaw"), Gimbal.YawDegrees);
+			P->SetNumberField(TEXT("zoom_factor"), Sim->GetZoomFactor());
 			return P;
 		}()) };
 	Data->SetArrayField(TEXT("payloads"), Payloads);
 
-	// 摄像头
+	// 摄像头（int 枚举与完整字段，对齐 dock report_drone_osd.py）
 	const TSharedRef<FJsonObject> Camera = MakeShared<FJsonObject>();
 	Camera->SetNumberField(TEXT("payload_index"), 0);
-	Camera->SetStringField(TEXT("camera_mode"), TEXT("unknown"));
-	Camera->SetStringField(TEXT("photo_state"), TEXT("idle"));
-	Camera->SetStringField(TEXT("recording_state"), TEXT("idle"));
-	Camera->SetNumberField(TEXT("zoom_factor"), 1.0);
-	Camera->SetNumberField(TEXT("remain_photo_num"), 0);
-	Camera->SetNumberField(TEXT("remain_record_duration"), 0);
-	Camera->SetStringField(TEXT("zoom_focus_state"), TEXT("idle"));
+	Camera->SetNumberField(TEXT("camera_mode"), DroneSim->GetCameraMode());
+	Camera->SetNumberField(TEXT("photo_state"), 0);
+	Camera->SetNumberField(TEXT("recording_state"), DroneSim->IsRecording() ? 1 : 0);
+	Camera->SetNumberField(TEXT("zoom_factor"), DroneSim->GetZoomFactor());
+	Camera->SetNumberField(TEXT("ir_zoom_factor"), 2.0);
+	Camera->SetNumberField(TEXT("remain_photo_num"), 9999);
+	Camera->SetNumberField(TEXT("remain_record_duration"), FMath::Max(0.0, 5400.0 - DroneSim->GetRecordingTimeSeconds()));
+	Camera->SetNumberField(TEXT("record_time"), DroneSim->GetRecordingTimeSeconds());
+	Camera->SetNumberField(TEXT("zoom_focus_mode"), 0);
+	Camera->SetNumberField(TEXT("zoom_focus_value"), 0);
+	Camera->SetNumberField(TEXT("zoom_max_focus_value"), 100);
+	Camera->SetNumberField(TEXT("zoom_min_focus_value"), 0);
+	Camera->SetNumberField(TEXT("zoom_focus_state"), 0);
+	Camera->SetBoolField(TEXT("screen_split_enable"), false);
+	Camera->SetArrayField(TEXT("photo_storage_settings"), { MakeShared<FJsonValueString>(TEXT("current")) });
+	Camera->SetArrayField(TEXT("video_storage_settings"), { MakeShared<FJsonValueString>(TEXT("current")) });
+	{
+		const TSharedRef<FJsonObject> Region = MakeShared<FJsonObject>();
+		Region->SetNumberField(TEXT("left"), 0.0);
+		Region->SetNumberField(TEXT("top"), 0.0);
+		Region->SetNumberField(TEXT("right"), 1.0);
+		Region->SetNumberField(TEXT("bottom"), 1.0);
+		Camera->SetObjectField(TEXT("liveview_world_region"), Region);
+	}
 	Data->SetArrayField(TEXT("cameras"), { MakeShared<FJsonValueObject>(Camera) });
+
+	// ---- 顶层结构补齐（对齐 dock report_drone_osd.py） ----
+	Data->SetNumberField(TEXT("gear"), Geo.Altitude > 8.0 ? 1 : 0);
+	Data->SetNumberField(TEXT("wind_speed"), 3.0);
+	Data->SetNumberField(TEXT("wind_direction"),
+		UAVPayloadMath::ComputeWindDirectionEnum(DroneSim->GetHeadingDegrees() + 180.0));
+	Data->SetNumberField(TEXT("total_flight_distance"), DroneSim->GetTotalFlightDistanceMeters());
+	Data->SetNumberField(TEXT("total_flight_time"), DroneSim->GetTotalFlightTimeSeconds());
+	{
+		const TSharedRef<FJsonObject> PositionState = MakeShared<FJsonObject>();
+		PositionState->SetNumberField(TEXT("gps_number"), 18);
+		PositionState->SetNumberField(TEXT("is_fixed"), 2);
+		PositionState->SetNumberField(TEXT("quality"), 4);
+		PositionState->SetNumberField(TEXT("rtk_number"), 14);
+		Data->SetObjectField(TEXT("position_state"), PositionState);
+	}
+	{
+		const TSharedRef<FJsonObject> Speaker = MakeShared<FJsonObject>();
+		Speaker->SetNumberField(TEXT("play_volume"), 0);
+		Data->SetObjectField(TEXT("speaker"), Speaker);
+	}
+	Data->SetNumberField(TEXT("speaker_volume"), 0);
+	{
+		const TSharedRef<FJsonObject> Storage = MakeShared<FJsonObject>();
+		Storage->SetNumberField(TEXT("total"), 131072);
+		Storage->SetNumberField(TEXT("used"), FMath::Min(131072.0 - 8192.0, DroneSim->GetRecordingTimeSeconds() * 4.2));
+		Data->SetObjectField(TEXT("storage"), Storage);
+	}
+	Data->SetNumberField(TEXT("night_lights_state"), DroneSim->IsRecording() ? 1 : 0);
+	Data->SetNumberField(TEXT("height_limit"), 500);
+	{
+		const TSharedRef<FJsonObject> DistanceLimit = MakeShared<FJsonObject>();
+		DistanceLimit->SetNumberField(TEXT("state"), 1);
+		DistanceLimit->SetNumberField(TEXT("distance_limit"), 3000);
+		DistanceLimit->SetBoolField(TEXT("is_near_distance_limit"), false);
+		Data->SetObjectField(TEXT("distance_limit_status"), DistanceLimit);
+	}
+	{
+		const TSharedRef<FJsonObject> Obstacle = MakeShared<FJsonObject>();
+		Obstacle->SetNumberField(TEXT("horizon"), 1);
+		Obstacle->SetNumberField(TEXT("upside"), 1);
+		Obstacle->SetNumberField(TEXT("downside"), 1);
+		Data->SetObjectField(TEXT("obstacle_avoidance"), Obstacle);
+	}
+	Data->SetNumberField(TEXT("activation_time"),
+		FDateTime::UtcNow().ToUnixTimestamp() * 1000LL - 86400000LL * 90);
+	Data->SetNumberField(TEXT("rc_lost_action"), 2);
+	Data->SetNumberField(TEXT("rth_altitude"), 60);
+	Data->SetNumberField(TEXT("total_flight_sorties"),
+		FMath::Max(1, FMath::FloorToInt(DroneSim->GetTotalFlightTimeSeconds() / 600.0) + 1));
+	Data->SetNumberField(TEXT("exit_wayline_when_rc_lost"), 1);
+	Data->SetStringField(TEXT("country"), TEXT("CN"));
+	Data->SetBoolField(TEXT("rid_state"), false);
+	Data->SetBoolField(TEXT("is_near_area_limit"), false);
+	Data->SetBoolField(TEXT("is_near_height_limit"), false);
+	Data->SetStringField(TEXT("track_id"), FString::Printf(TEXT("SIM-%s"), *DroneSn));
 
 	return Data;
 }
