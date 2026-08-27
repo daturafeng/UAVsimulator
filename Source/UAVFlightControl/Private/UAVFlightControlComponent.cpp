@@ -232,6 +232,7 @@ int32 UUAVFlightControlComponent::HandleFlighttaskPrepare(const TSharedPtr<FJson
 	Entry.RthAltitude = ReadNumber(InData, TEXT("rth_altitude"), 100.0);
 	CurrentRthAltitude = Entry.RthAltitude;
 	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 航线任务已就绪：flight_id=%s"), *FlightId);
+	OnFlighttaskReady.Broadcast(FlightId);
 	return Success;
 }
 

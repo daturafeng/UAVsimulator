@@ -49,6 +49,23 @@ namespace
 		}
 		return FString();
 	}
+
+	/**
+	 * flighttask_progress 状态 → WaylineMissionStateEnum（对齐 dock 枚举：5=到达首航点、6=执行中、9=结束）。
+	 * 终态（ok/failed/canceled/timeout/partially_done 等）统一映射为 9。
+	 */
+	int32 WaylineMissionStateFromStatus(const FString& InStatus)
+	{
+		if (InStatus == TEXT("sent"))
+		{
+			return 5;
+		}
+		if (InStatus == TEXT("in_progress"))
+		{
+			return 6;
+		}
+		return 9;
+	}
 }
 
 UUAVMqttBridgeComponent::UUAVMqttBridgeComponent()
@@ -102,6 +119,7 @@ void UUAVMqttBridgeComponent::BeginPlay()
 		FlightControl->OnTakeoffProgress.AddDynamic(this, &UUAVMqttBridgeComponent::OnTakeoffProgress);
 		FlightControl->OnFlighttaskProgress.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskProgress);
 		FlightControl->OnReturnHomeStatus.AddDynamic(this, &UUAVMqttBridgeComponent::OnReturnHomeStatus);
+		FlightControl->OnFlighttaskReady.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskReady);
 	}
 	if (CameraStream)
 	{
@@ -124,6 +142,7 @@ void UUAVMqttBridgeComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		FlightControl->OnTakeoffProgress.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnTakeoffProgress);
 		FlightControl->OnFlighttaskProgress.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskProgress);
 		FlightControl->OnReturnHomeStatus.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnReturnHomeStatus);
+		FlightControl->OnFlighttaskReady.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskReady);
 	}
 	if (CameraStream)
 	{
@@ -219,6 +238,8 @@ void UUAVMqttBridgeComponent::OnMqttConnect(EMQTTConnectReturnCode ReturnCode)
 		PublishDeviceState(DroneSn, true);
 		// 上报直播能力（dock 依赖 live_capacity 建立直播能力缓存）
 		PublishLiveCapacity();
+		// 上报 HMS 空告警（dock 依赖 hms 记录设备告警）
+		PublishHms(BuildHmsPayload());
 
 		OnConnectionChanged.Broadcast(true);
 	}
@@ -445,6 +466,16 @@ void UUAVMqttBridgeComponent::PublishLiveCapacity()
 	}
 }
 
+void UUAVMqttBridgeComponent::PublishHms(const TSharedPtr<FJsonObject>& InHmsData)
+{
+	if (!MqttClient || !bConnected || !InHmsData.IsValid())
+	{
+		return;
+	}
+	PublishEvent(kEventHms, InHmsData);
+	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布 HMS 告警事件：%s"), *SerializeJson(InHmsData.ToSharedRef()));
+}
+
 void UUAVMqttBridgeComponent::PublishRaw(const FString& InTopic, const FString& InPayloadJson)
 {
 	if (!MqttClient || !bConnected)
@@ -485,21 +516,7 @@ void UUAVMqttBridgeComponent::OnTakeoffProgress(const FString& InStatus, const F
 
 void UUAVMqttBridgeComponent::OnFlighttaskProgress(const FString& InStatus, const FString& InFlightId, int32 InCurrentWaypointIndex, int32 InPercent)
 {
-	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
-	Data->SetStringField(TEXT("status"), InStatus);
-	Data->SetStringField(TEXT("flight_id"), InFlightId);
-	Data->SetNumberField(TEXT("currentWaypointIndex"), InCurrentWaypointIndex);
-	Data->SetNumberField(TEXT("percent"), InPercent);
-
-	const TSharedRef<FJsonObject> Ext = MakeShared<FJsonObject>();
-	Ext->SetStringField(TEXT("flightId"), InFlightId);
-	Ext->SetStringField(TEXT("trackId"), NewUuid());
-	Ext->SetStringField(TEXT("waylineId"), TEXT("W000000001"));
-	Ext->SetNumberField(TEXT("waylineMissionState"), 1);
-	Ext->SetNumberField(TEXT("mediaCount"), 0);
-	Data->SetObjectField(TEXT("ext"), Ext);
-
-	PublishEvent(kEventFlighttaskProgress, Data);
+	PublishEvent(kEventFlighttaskProgress, BuildFlighttaskProgressEventData(InStatus, InFlightId, InCurrentWaypointIndex, InPercent));
 }
 
 // ---- 事件回调：相机 ----
@@ -534,12 +551,20 @@ void UUAVMqttBridgeComponent::OnLiveCommandResult(const FString& InMethod, int32
 
 void UUAVMqttBridgeComponent::OnReturnHomeStatus(const FString& InStatus, const FString& InReason)
 {
-	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
-	Data->SetNumberField(TEXT("result"), 0);
-	Data->SetStringField(TEXT("status"), InStatus);
-	Data->SetStringField(TEXT("reason"), InReason);
-	PublishEvent(kEventReturnHomeStatus, Data);
+	// 对齐 dock EventsMethodEnum：返航状态事件为 return_home_info（不再发布 return_home_status）
+	PublishEvent(kEventReturnHomeInfo, BuildReturnHomeInfoEventData());
+	// 低电量自动返航连带上报 HMS 告警（dock DeviceHmsServiceImpl.hms）
+	if (InStatus == TEXT("rth_auto_trigger") && InReason == TEXT("battery_low"))
+	{
+		PublishHms(BuildHmsPayload(true));
+	}
 	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布返航状态事件：status=%s reason=%s"), *InStatus, *InReason);
+}
+
+void UUAVMqttBridgeComponent::OnFlighttaskReady(const FString& InFlightId)
+{
+	PublishEvent(kEventFlighttaskReady, BuildFlighttaskReadyData(InFlightId));
+	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布任务就绪事件：flight_id=%s"), *InFlightId);
 }
 
 // ---- OSD 组装 ----
@@ -864,6 +889,85 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildLiveCapacityPayload() cons
 	Capacity->SetNumberField(TEXT("coexist_video_number_max"), 3);
 	Capacity->SetArrayField(TEXT("device_list"), DeviceList);
 	Data->SetObjectField(TEXT("live_capacity"), Capacity);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildFlighttaskProgressEventData(const FString& InStatus, const FString& InFlightId, int32 InCurrentWaypointIndex, int32 InPercent) const
+{
+	// 对齐 dock EventsDataRequest<FlighttaskProgress>：data = { result, output:{ status, progress, ext } }
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), 0);
+
+	const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+	Output->SetStringField(TEXT("status"), InStatus);
+
+	const TSharedRef<FJsonObject> Progress = MakeShared<FJsonObject>();
+	Progress->SetNumberField(TEXT("current_step"), InCurrentWaypointIndex);
+	Progress->SetNumberField(TEXT("percent"), InPercent);
+	Output->SetObjectField(TEXT("progress"), Progress);
+
+	const TSharedRef<FJsonObject> Ext = MakeShared<FJsonObject>();
+	Ext->SetNumberField(TEXT("current_waypoint_index"), InCurrentWaypointIndex);
+	Ext->SetNumberField(TEXT("media_count"), 0);
+	Ext->SetStringField(TEXT("flight_id"), InFlightId);
+	Ext->SetStringField(TEXT("track_id"), NewUuid());
+	Ext->SetStringField(TEXT("wayline_id"), TEXT("W000000001"));
+	Ext->SetNumberField(TEXT("wayline_mission_state"), WaylineMissionStateFromStatus(InStatus));
+	Output->SetObjectField(TEXT("ext"), Ext);
+
+	Data->SetObjectField(TEXT("output"), Output);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildReturnHomeInfoEventData() const
+{
+	// 对齐 dock ReturnHomeInfo：planned_path_points / last_point_type / flight_id
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> PathPoints;
+	if (DroneSim)
+	{
+		const TSharedRef<FJsonObject> Point = MakeShared<FJsonObject>();
+		Point->SetNumberField(TEXT("latitude"), DroneSim->AirportOrigin.Latitude);
+		Point->SetNumberField(TEXT("longitude"), DroneSim->AirportOrigin.Longitude);
+		Point->SetNumberField(TEXT("height"), FlightControl ? FlightControl->GetCurrentRthAltitude() : 0.0);
+		PathPoints.Add(MakeShared<FJsonValueObject>(Point));
+	}
+	Data->SetArrayField(TEXT("planned_path_points"), PathPoints);
+	Data->SetNumberField(TEXT("last_point_type"), PathPoints.Num() > 0 ? 0 : 65535);
+	Data->SetStringField(TEXT("flight_id"), FlightControl ? FlightControl->GetCurrentFlightId() : FString());
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildFlighttaskReadyData(const FString& InFlightId) const
+{
+	// 对齐 dock FlightTaskServiceImpl.flighttaskReady：data.flight_ids
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> FlightIds;
+	FlightIds.Add(MakeShared<FJsonValueString>(InFlightId));
+	Data->SetArrayField(TEXT("flight_ids"), FlightIds);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildHmsPayload(bool bLowBatteryAlarm) const
+{
+	// 对齐 dock Hms / DeviceHms / DeviceHmsArgs（Jackson snake_case）
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> List;
+	if (bLowBatteryAlarm)
+	{
+		const TSharedRef<FJsonObject> Alarm = MakeShared<FJsonObject>();
+		Alarm->SetStringField(TEXT("code"), TEXT("fpv_tip_0x1B030014"));
+		Alarm->SetStringField(TEXT("device_type"), TEXT("0-100-1"));
+		Alarm->SetBoolField(TEXT("imminent"), true);
+		Alarm->SetBoolField(TEXT("in_the_sky"), true);
+		Alarm->SetNumberField(TEXT("level"), 1);
+		Alarm->SetNumberField(TEXT("module"), 0);
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetNumberField(TEXT("component_index"), 0);
+		Alarm->SetObjectField(TEXT("args"), Args);
+		List.Add(MakeShared<FJsonValueObject>(Alarm));
+	}
+	Data->SetArrayField(TEXT("list"), List);
 	return Data;
 }
 

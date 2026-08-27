@@ -54,6 +54,18 @@ public:
 	/** 组装直播能力 data（data.live_capacity，对齐 dock DockLiveCapacity / report_live_capacity.py；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildLiveCapacityPayload() const;
 
+	/** 组装 flighttask_progress 事件 data（对齐 dock EventsDataRequest<FlighttaskProgress>；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildFlighttaskProgressEventData(const FString& InStatus, const FString& InFlightId, int32 InCurrentWaypointIndex, int32 InPercent) const;
+
+	/** 组装 return_home_info 事件 data（对齐 dock ReturnHomeInfo；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildReturnHomeInfoEventData() const;
+
+	/** 组装 flighttask_ready 事件 data（data.flight_ids；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildFlighttaskReadyData(const FString& InFlightId) const;
+
+	/** 组装 hms 事件 data（data.list；InLowBatteryAlarm 为 true 时含低电量告警；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildHmsPayload(bool bLowBatteryAlarm = false) const;
+
 	// ---- 配置（默认值对齐 dock 联调环境） ----
 	/** Broker 地址 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
@@ -161,6 +173,9 @@ protected:
 	/** 发布直播能力（thing/product/{DockSn}/state，对齐 dock report_live_capacity.py） */
 	void PublishLiveCapacity();
 
+	/** 发布 hms 告警事件（thing/product/{DockSn}/events，method=hms） */
+	void PublishHms(const TSharedPtr<FJsonObject>& InHmsData);
+
 	// ---- 事件回调（BeginPlay 时绑定飞控/相机委托） ----
 	UFUNCTION()
 	void OnFlightCommandResult(const FString& InMethod, int32 InResult);
@@ -179,6 +194,9 @@ protected:
 
 	UFUNCTION()
 	void OnReturnHomeStatus(const FString& InStatus, const FString& InReason);
+
+	UFUNCTION()
+	void OnFlighttaskReady(const FString& InFlightId);
 
 	// ---- OSD 组装 ----
 	/** 从无人机模拟组件读取遥测，组装无人机 OSD data（对齐 dock report_drone_osd.py） */

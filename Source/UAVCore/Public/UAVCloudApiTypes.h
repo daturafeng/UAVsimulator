@@ -66,7 +66,9 @@ namespace UAV::CloudApi
 	// ---- 事件 method ----
 	UAVCORE_API extern const TCHAR* kEventTakeoffToPointProgress;	// takeoff_to_point_progress
 	UAVCORE_API extern const TCHAR* kEventFlighttaskProgress;		// flighttask_progress
-	UAVCORE_API extern const TCHAR* kEventReturnHomeStatus;			// return_home_status
+	UAVCORE_API extern const TCHAR* kEventReturnHomeInfo;			// return_home_info（对齐 dock EventsMethodEnum）
+	UAVCORE_API extern const TCHAR* kEventFlighttaskReady;			// flighttask_ready
+	UAVCORE_API extern const TCHAR* kEventHms;						// hms
 
 	// ---- 视频清晰度档位（与上云 API video_quality 语义一致）----
 	/** 推流参数（分辨率/码率/帧率） */

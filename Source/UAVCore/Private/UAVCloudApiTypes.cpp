@@ -62,7 +62,9 @@ namespace UAV::CloudApi
 	// ---- 事件 method ----
 	const TCHAR* kEventTakeoffToPointProgress = TEXT("takeoff_to_point_progress");
 	const TCHAR* kEventFlighttaskProgress = TEXT("flighttask_progress");
-	const TCHAR* kEventReturnHomeStatus = TEXT("return_home_status");
+	const TCHAR* kEventReturnHomeInfo = TEXT("return_home_info");
+	const TCHAR* kEventFlighttaskReady = TEXT("flighttask_ready");
+	const TCHAR* kEventHms = TEXT("hms");
 
 	FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality)
 	{

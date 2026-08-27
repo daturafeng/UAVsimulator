@@ -33,6 +33,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FUAVFlighttaskProgressDelegate, co
 /** 返航状态事件（Status: rth_auto_trigger 等；Reason: battery_low 等） */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FUAVReturnHomeStatusDelegate, const FString&, Status, const FString&, Reason);
 
+/** 任务就绪事件（flighttask_prepare 成功后广播，携带 flight_id） */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVFlighttaskReadyDelegate, const FString&, FlightId);
+
 /** 航线任务条目：flighttask_create/prepare 阶段登记，execute 时消费 */
 struct FUAVMissionEntry
 {
@@ -86,6 +89,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|FlightControl")
 	void SetWaylineWaypoints(const FString& InFlightId, const TArray<FUAVWaypoint>& InWaypoints);
 
+	/** 当前任务 flight_id（可能为空串） */
+	UFUNCTION(BlueprintPure, Category = "UAV|FlightControl")
+	FString GetCurrentFlightId() const { return CurrentFlightId; }
+
+	/** 当前返航高度（米） */
+	UFUNCTION(BlueprintPure, Category = "UAV|FlightControl")
+	double GetCurrentRthAltitude() const { return CurrentRthAltitude; }
+
 	/** 指令处理结果事件 */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
 	FUAVCommandResultDelegate OnCommandResult;
@@ -101,6 +112,10 @@ public:
 	/** 返航状态事件（自动返航触发/人工返航状态） */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
 	FUAVReturnHomeStatusDelegate OnReturnHomeStatus;
+
+	/** 任务就绪事件（flighttask_prepare 成功后广播） */
+	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
+	FUAVFlighttaskReadyDelegate OnFlighttaskReady;
 
 protected:
 	virtual void BeginPlay() override;
