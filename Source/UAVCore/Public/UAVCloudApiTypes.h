@@ -43,6 +43,23 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kEventTakeoffToPointProgress;	// takeoff_to_point_progress
 	UAVCORE_API extern const TCHAR* kEventFlighttaskProgress;		// flighttask_progress
 
+	// ---- 视频清晰度档位（与上云 API video_quality 语义一致）----
+	/** 推流参数（分辨率/码率/帧率） */
+	struct UAVCORE_API FUAVVideoQualityParams
+	{
+		/** 宽（像素） */
+		int32 Width = 0;
+		/** 高（像素） */
+		int32 Height = 0;
+		/** 码率（kbps） */
+		int32 BitrateKbps = 0;
+		/** 帧率（fps） */
+		int32 Fps = 0;
+	};
+
+	/** 按 video_quality（0=自适应/1=流畅/2=标清/3=高清/4=超清）返回推流参数；非法档位回退自适应 */
+	UAVCORE_API FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality);
+
 	// ---- 工具 ----
 	/** 将 {sn} 占位替换为具体设备 SN */
 	UAVCORE_API FString MakeTopic(const FString& InTemplate, const FString& InSn);

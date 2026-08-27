@@ -39,6 +39,20 @@ namespace UAV::CloudApi
 	const TCHAR* kEventTakeoffToPointProgress = TEXT("takeoff_to_point_progress");
 	const TCHAR* kEventFlighttaskProgress = TEXT("flighttask_progress");
 
+	FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality)
+	{
+		FUAVVideoQualityParams Params;
+		switch (InQuality)
+		{
+		case 1: Params = { 640, 360, 800, 15 }; break;	// 流畅
+		case 2: Params = { 1280, 720, 2000, 15 }; break;	// 标清
+		case 3: Params = { 1920, 1080, 4000, 15 }; break;	// 高清
+		case 4: Params = { 1920, 1080, 6000, 15 }; break;	// 超清
+		default: Params = { 1280, 720, 2000, 15 }; break;	// 自适应
+		}
+		return Params;
+	}
+
 	FString MakeTopic(const FString& InTemplate, const FString& InSn)
 	{
 		return InTemplate.Replace(TEXT("{sn}"), *InSn);

@@ -1,10 +1,13 @@
-// 相机载荷模拟与推流：直播会话模型（video_id、RTMP 地址、清晰度/镜头）
+// 相机载荷模拟与推流：直播会话模型 + FFmpeg 真实 RTMP 推流管线
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Dom/JsonObject.h"
 #include "UAVCameraStreamComponent.generated.h"
+
+class UTextureRenderTarget2D;
+class USceneCaptureComponent2D;
 
 /** 直播会话 */
 USTRUCT(BlueprintType)
@@ -41,7 +44,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FUAVLiveCommandResultDelegate, cons
 
 /**
  * 相机载荷模拟组件：维护直播会话模型，处理 live_start_push / live_stop_push /
- * live_set_quality / live_lens_change 指令。真实 RTMP 编码推流在后续变更接入。
+ * live_set_quality / live_lens_change 指令，并通过 FFmpeg 子进程把 RenderTarget 画面
+ * 编码为 H.264/FLV 推送到 RTMP 服务器（首期单会话真实推流）。
  */
 UCLASS(ClassGroup = (UAV), meta = (BlueprintSpawnableComponent))
 class UAVCAMERASTREAM_API UUAVCameraStreamComponent : public UActorComponent
@@ -63,6 +67,26 @@ public:
 	/** RTMP 服务器基础地址（如 rtmp://127.0.0.1:1935/live/）；指令携带 url 时优先使用指令 url */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live")
 	FString RtmpBaseUrl = TEXT("rtmp://127.0.0.1:1935/live/");
+
+	/** 画面源 RenderTarget；未配置时 BeginPlay 自动创建 SceneCapture2D + RenderTarget */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live")
+	TObjectPtr<UTextureRenderTarget2D> RenderTarget;
+
+	/** FFmpeg 可执行文件路径；为空时依次探测 PATH 与常见安装目录 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live")
+	FString FfmpegPath;
+
+	/** 严格模式：FFmpeg 不可用时 live_start_push 返回失败；默认 false（降级为占位推流） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live")
+	bool bRequireFfmpeg = false;
+
+	/** 自动创建 RenderTarget 的默认宽度（未配置 RenderTarget 时使用） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live")
+	int32 AutoRenderTargetWidth = 1280;
+
+	/** 自动创建 RenderTarget 的默认高度（未配置 RenderTarget 时使用） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live")
+	int32 AutoRenderTargetHeight = 720;
 
 	// ---- 事件 ----
 	/** 直播状态变更事件 */
@@ -90,6 +114,11 @@ public:
 	bool GetSession(const FString& InVideoId, FUAVLiveSession& OutSession) const;
 
 protected:
+	// ---- 生命周期 ----
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
 	// ---- 指令处理 ----
 	int32 HandleLiveStartPush(const TSharedPtr<FJsonObject>& InData);
 	int32 HandleLiveStopPush(const TSharedPtr<FJsonObject>& InData);
@@ -102,7 +131,46 @@ protected:
 	/** 从 video_id 解析镜头类型（{sn}/{cameraIndex}/{videoType}-0 → videoType） */
 	FString ParseVideoTypeFromVideoId(const FString& InVideoId) const;
 
+	// ---- 推流管线 ----
+	/** 启动会话推流（FFmpeg 探测/降级/子进程启动）；返回 false 表示未真实推流（占位或失败） */
+	bool StartStreaming(FUAVLiveSession& InSession);
+
+	/** 停止会话推流并回收子进程与管道 */
+	void StopStreaming(FUAVLiveSession& InSession);
+
+	/** 按会话档位写入一帧（游戏线程 Tick 节流调用） */
+	void WriteSessionFrame(const FUAVLiveSession& InSession);
+
+	/** 探测 FFmpeg 可执行文件路径（配置路径 → PATH → 常见安装目录）；不可用返回空串 */
+	FString ResolveFfmpegPath() const;
+
+	/** 确保画面源有效：未配置时自动创建 SceneCapture2D + RenderTarget */
+	void EnsureRenderTarget();
+
 private:
 	/** 直播会话列表 */
 	TArray<FUAVLiveSession> Sessions;
+
+	/** 自动创建的场景捕获组件（仅未配置 RenderTarget 时创建） */
+	UPROPERTY()
+	TObjectPtr<USceneCaptureComponent2D> AutoCapture;
+
+	/** 自动创建的渲染目标（仅未配置 RenderTarget 时创建） */
+	UPROPERTY()
+	TObjectPtr<UTextureRenderTarget2D> AutoRenderTarget;
+
+	/** 当前活动推流的 video_id（空表示无真实推流；首期单会话） */
+	FString ActiveStreamVideoId;
+
+	/** FFmpeg 子进程句柄 */
+	FProcHandle FfmpegProcess;
+
+	/** stdin 写管道（喂帧） */
+	void* StdinWritePipe = nullptr;
+
+	/** stdout 读管道（日志） */
+	void* StdoutReadPipe = nullptr;
+
+	/** 上次写帧时间（秒） */
+	float LastFrameWriteTime = 0.0f;
 };
