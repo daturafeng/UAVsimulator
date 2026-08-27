@@ -50,7 +50,7 @@ bool FUAVDockOsdStructureTest::RunTest(const FString& Parameters)
 		TEXT("supplement_light_state"), TEXT("emergency_stop_state"), TEXT("air_conditioner"),
 		TEXT("battery_store_mode"), TEXT("alarm_state"), TEXT("putter_state"),
 		TEXT("sub_device"), TEXT("job_number"), TEXT("acc_time"), TEXT("activation_time"),
-		TEXT("electric_supply_voltage"), TEXT("working_voltage"), TEXT("working_current"),
+		TEXT("maintain_status"), TEXT("electric_supply_voltage"), TEXT("working_voltage"), TEXT("working_current"),
 		TEXT("backup_battery"), TEXT("drone_battery_maintenance_info"),
 		TEXT("flighttask_step_code"), TEXT("flighttask_prepare_capacity"),
 		TEXT("media_file_detail"), TEXT("wireless_link"), TEXT("drc_state"),
@@ -90,6 +90,24 @@ bool FUAVDockOsdStructureTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("drone_charge_state 含 capacity_percent/state"),
 		Data->GetObjectField(TEXT("drone_charge_state"))->HasField(TEXT("capacity_percent"))
 		&& Data->GetObjectField(TEXT("drone_charge_state"))->HasField(TEXT("state")));
+	{
+		// maintain_status：maintain_status_array 含一个 DockMaintainStatus 元素（四字段齐全）
+		const TArray<TSharedPtr<FJsonValue>> MaintainArray =
+			Data->GetObjectField(TEXT("maintain_status"))->GetArrayField(TEXT("maintain_status_array"));
+		TestEqual(TEXT("maintain_status_array 含 1 个元素"), 1, MaintainArray.Num());
+		if (MaintainArray.Num() > 0)
+		{
+			const TSharedPtr<FJsonObject> Item = MaintainArray[0]->AsObject();
+			TestTrue(TEXT("maintain_status 元素可解析为对象"), Item.IsValid());
+			if (Item.IsValid())
+			{
+				TestEqual(TEXT("last_maintain_flight_sorties=0"), 0.0, Item->GetNumberField(TEXT("last_maintain_flight_sorties")));
+				TestEqual(TEXT("last_maintain_time=0"), 0.0, Item->GetNumberField(TEXT("last_maintain_time")));
+				TestEqual(TEXT("last_maintain_type=0"), 0.0, Item->GetNumberField(TEXT("last_maintain_type")));
+				TestFalse(TEXT("state=false"), Item->GetBoolField(TEXT("state")));
+			}
+		}
+	}
 	TestTrue(TEXT("network_state 含 type/quality/rate"),
 		Data->GetObjectField(TEXT("network_state"))->HasField(TEXT("type"))
 		&& Data->GetObjectField(TEXT("network_state"))->HasField(TEXT("rate")));

@@ -822,6 +822,19 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const
 	Data->SetNumberField(TEXT("first_power_on"), NowMillis - 86400000LL * 180);
 	Data->SetNumberField(TEXT("activation_time"), NowMillis - 86400000LL * 120);
 	{
+		// 维护状态：新机场未保养基线（对齐 OsdDockMaintainStatus / DockMaintainStatus）
+		const TSharedRef<FJsonObject> Maintain = MakeShared<FJsonObject>();
+		const TSharedRef<FJsonObject> MaintainItem = MakeShared<FJsonObject>();
+		MaintainItem->SetNumberField(TEXT("last_maintain_flight_sorties"), 0);
+		MaintainItem->SetNumberField(TEXT("last_maintain_time"), 0);
+		MaintainItem->SetNumberField(TEXT("last_maintain_type"), 0); // 0=NO 未保养
+		MaintainItem->SetBoolField(TEXT("state"), false);
+		TArray<TSharedPtr<FJsonValue>> MaintainArray;
+		MaintainArray.Add(MakeShared<FJsonValueObject>(MaintainItem));
+		Maintain->SetArrayField(TEXT("maintain_status_array"), MaintainArray);
+		Data->SetObjectField(TEXT("maintain_status"), Maintain);
+	}
+	{
 		const TSharedRef<FJsonObject> Position = MakeShared<FJsonObject>();
 		Position->SetBoolField(TEXT("is_calibration"), false);
 		Position->SetNumberField(TEXT("gps_number"), 21);
