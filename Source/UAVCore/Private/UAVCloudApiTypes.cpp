@@ -28,6 +28,14 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodLiveStopPush = TEXT("live_stop_push");
 	const TCHAR* kMethodLiveSetQuality = TEXT("live_set_quality");
 	const TCHAR* kMethodLiveLensChange = TEXT("live_lens_change");
+	const TCHAR* kMethodPayloadAuthorityGrab = TEXT("payload_authority_grab");
+	const TCHAR* kMethodCameraModeSwitch = TEXT("camera_mode_switch");
+	const TCHAR* kMethodCameraPhotoTake = TEXT("camera_photo_take");
+	const TCHAR* kMethodCameraPhotoStop = TEXT("camera_photo_stop");
+	const TCHAR* kMethodCameraRecordingStart = TEXT("camera_recording_start");
+	const TCHAR* kMethodCameraRecordingStop = TEXT("camera_recording_stop");
+	const TCHAR* kMethodCameraAim = TEXT("camera_aim");
+	const TCHAR* kMethodGimbalReset = TEXT("gimbal_reset");
 
 	// ---- 默认设备标识（与 dock script/common.py 假设备口径一致）----
 	const TCHAR* kDefaultDockSn = TEXT("DOCK3TEST001");
@@ -38,6 +46,7 @@ namespace UAV::CloudApi
 	// ---- 事件 method ----
 	const TCHAR* kEventTakeoffToPointProgress = TEXT("takeoff_to_point_progress");
 	const TCHAR* kEventFlighttaskProgress = TEXT("flighttask_progress");
+	const TCHAR* kEventReturnHomeStatus = TEXT("return_home_status");
 
 	FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality)
 	{

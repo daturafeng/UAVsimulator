@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Dom/JsonObject.h"
+#include "UAVDroneSimComponent.h"
 #include "UAVCameraStreamComponent.generated.h"
 
 class UTextureRenderTarget2D;
@@ -100,6 +101,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Live", meta = (ClampMin = "0.1"))
 	double ReconnectMaxIntervalSeconds = 30.0;
 
+	/** 注入无人机模拟组件（载荷指令驱动载荷状态；必须在 BeginPlay 前调用） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetDroneSim(UUAVDroneSimComponent* InDroneSim);
+
 	// ---- 事件 ----
 	/** 直播状态变更事件 */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|Live|Event")
@@ -137,6 +142,16 @@ protected:
 	int32 HandleLiveSetQuality(const TSharedPtr<FJsonObject>& InData);
 	int32 HandleLiveLensChange(const TSharedPtr<FJsonObject>& InData);
 
+	// ---- 载荷指令处理 ----
+	int32 HandlePayloadAuthorityGrab(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraModeSwitch(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraPhotoTake(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraPhotoStop(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraRecordingStart(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraRecordingStop(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleCameraAim(const TSharedPtr<FJsonObject>& InData);
+	int32 HandleGimbalReset(const TSharedPtr<FJsonObject>& InData);
+
 	/** 查找会话（非 const 版本） */
 	FUAVLiveSession* FindSession(const FString& InVideoId);
 
@@ -169,6 +184,10 @@ protected:
 	void OnReconnectTimer();
 
 private:
+	/** 关联的无人机模拟组件（载荷状态来源） */
+	UPROPERTY()
+	TObjectPtr<UUAVDroneSimComponent> DroneSim;
+
 	/** 直播会话列表 */
 	TArray<FUAVLiveSession> Sessions;
 

@@ -240,6 +240,66 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
 	void SetZoomFactor(double NewZoomFactor);
 
+	/** 是否拍照中 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	bool IsPhotoTaking() const { return bPhotoTaking; }
+
+	/** 剩余照片数（初始 9999，每次拍照减 1，最低 0） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	int32 GetRemainingPhotoNum() const { return RemainingPhotoNum; }
+
+	/** 累计已拍照片数 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	int32 GetTakenPhotoCount() const { return TakenPhotoCount; }
+
+	/** 拍照：剩余照片数减 1（最低 0）、累计加 1，进入拍照中状态（3 秒后自动结束） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void TakePhoto();
+
+	/** 设置拍照中状态（camera_photo_stop 以 false 结束拍照） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetPhotoTaking(bool bInPhotoTaking);
+
+	/** 录像指令覆盖：开始录像（指令优先于飞行模式推导） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void StartRecording();
+
+	/** 录像指令覆盖：停止录像 */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void StopRecording();
+
+	/** 清除录像指令覆盖，恢复按飞行模式推导 */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void ClearRecordingOverride();
+
+	/** 设置云台指令目标（覆盖时间微动；俯仰为有符号角，偏航按 0-360 归一化） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetGimbalTarget(double InPitchDegrees, double InYawDegrees);
+
+	/** 清除云台指令目标，恢复时间微动推导 */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void ResetGimbalTarget();
+
+	/** 是否设置了云台指令目标 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	bool HasGimbalTarget() const { return bHasGimbalTarget; }
+
+	/** 云台指令目标俯仰角（度） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetGimbalTargetPitch() const { return GimbalTargetPitch; }
+
+	/** 云台指令目标偏航角（度） */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	double GetGimbalTargetYaw() const { return GimbalTargetYaw; }
+
+	/** 设置载荷权（payload_authority_grab 抢占后为 true） */
+	UFUNCTION(BlueprintCallable, Category = "UAV|Payload")
+	void SetPayloadAuthority(bool bInHasAuthority) { bHasPayloadAuthority = bInHasAuthority; }
+
+	/** 是否已抢占载荷权 */
+	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
+	bool HasPayloadAuthority() const { return bHasPayloadAuthority; }
+
 	/** 是否录像中（起飞/航线/返航状态，对齐 dock 模式编码集合） */
 	UFUNCTION(BlueprintPure, Category = "UAV|Payload")
 	bool IsRecording() const;
@@ -368,6 +428,46 @@ private:
 	/** 当前变焦倍率 */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
 	double ZoomFactor = 3.0;
+
+	/** 拍照中（photo_state 输出源） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	bool bPhotoTaking = false;
+
+	/** 剩余照片数（初始 9999，对齐 dock 口径） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	int32 RemainingPhotoNum = 9999;
+
+	/** 累计已拍照片数 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	int32 TakenPhotoCount = 0;
+
+	/** 拍照剩余时长（秒，到 0 自动结束单张拍摄） */
+	UPROPERTY()
+	double PhotoTakingRemainingSeconds = 0.0;
+
+	/** 录像指令覆盖是否已设置 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	bool bRecordingOverrideSet = false;
+
+	/** 录像指令覆盖值（bRecordingOverrideSet 为真时生效） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	bool bRecordingOverrideValue = false;
+
+	/** 云台指令目标是否已设置 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	bool bHasGimbalTarget = false;
+
+	/** 云台指令目标俯仰角（度，有符号） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double GimbalTargetPitch = 0.0;
+
+	/** 云台指令目标偏航角（度，输出时归一化到 0-360） */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	double GimbalTargetYaw = 0.0;
+
+	/** 是否已抢占载荷权 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))
+	bool bHasPayloadAuthority = false;
 
 	/** 累计飞行距离（米） */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|Payload", meta = (AllowPrivateAccess = "true"))

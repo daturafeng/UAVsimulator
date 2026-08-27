@@ -69,6 +69,9 @@ namespace UAVPayloadMath
 	/** 云台角度：俯仰/横滚随时间正弦微动，偏航可选跟随机头（含微动），角度归一化到 0-360 */
 	UAVDRONESIM_API FUAVGimbalState ComputeGimbalState(double InHeadingDegrees, double InElapsedSeconds, const FUAVGimbalConfig& InConfig);
 
+	/** 云台指令目标叠加：覆盖基础状态中的俯仰/偏航（横滚保持），偏航归一化到 0-360；指令优先级高于时间微动 */
+	UAVDRONESIM_API FUAVGimbalState ApplyGimbalTarget(const FUAVGimbalState& InBase, double InTargetPitchDegrees, double InTargetYawDegrees);
+
 	/** 风向 8 方位枚举（dock 口径：输入已按 (朝向+180) 归一化，0=北，顺时针 45° 步进，返回 0-7） */
 	UAVDRONESIM_API int32 ComputeWindDirectionEnum(double InDegrees);
 

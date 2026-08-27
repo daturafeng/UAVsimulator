@@ -205,8 +205,59 @@ void UUAVDroneSimComponent::SetZoomFactor(double NewZoomFactor)
 	ZoomFactor = FMath::Clamp(NewZoomFactor, ZoomFactorMin, FMath::Max(ZoomFactorMin, ZoomFactorMax));
 }
 
+void UUAVDroneSimComponent::TakePhoto()
+{
+	RemainingPhotoNum = FMath::Max(0, RemainingPhotoNum - 1);
+	++TakenPhotoCount;
+	SetPhotoTaking(true);
+}
+
+void UUAVDroneSimComponent::SetPhotoTaking(bool bInPhotoTaking)
+{
+	bPhotoTaking = bInPhotoTaking;
+	// 启动拍照时重置自动结束计时（模拟单张拍摄时长）
+	PhotoTakingRemainingSeconds = bInPhotoTaking ? 3.0 : 0.0;
+}
+
+void UUAVDroneSimComponent::StartRecording()
+{
+	bRecordingOverrideSet = true;
+	bRecordingOverrideValue = true;
+}
+
+void UUAVDroneSimComponent::StopRecording()
+{
+	bRecordingOverrideSet = true;
+	bRecordingOverrideValue = false;
+}
+
+void UUAVDroneSimComponent::ClearRecordingOverride()
+{
+	bRecordingOverrideSet = false;
+	bRecordingOverrideValue = false;
+}
+
+void UUAVDroneSimComponent::SetGimbalTarget(double InPitchDegrees, double InYawDegrees)
+{
+	bHasGimbalTarget = true;
+	GimbalTargetPitch = InPitchDegrees;
+	GimbalTargetYaw = InYawDegrees;
+}
+
+void UUAVDroneSimComponent::ResetGimbalTarget()
+{
+	bHasGimbalTarget = false;
+	GimbalTargetPitch = 0.0;
+	GimbalTargetYaw = 0.0;
+}
+
 bool UUAVDroneSimComponent::IsRecording() const
 {
+	// 指令覆盖优先，否则按飞行模式推导
+	if (bRecordingOverrideSet)
+	{
+		return bRecordingOverrideValue;
+	}
 	// 对齐 dock：模式编码 ∈ {1,4,9} 即 起飞/航线/返航 时录像中
 	return FlightState == EUAVFlightState::TakingOff
 		|| FlightState == EUAVFlightState::Wayline
@@ -239,6 +290,22 @@ void UUAVDroneSimComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 
 	ElapsedSimTimeSeconds += DeltaTime;
 	GimbalState = UAVPayloadMath::ComputeGimbalState(HeadingDegrees, ElapsedSimTimeSeconds, GimbalConfig);
+	if (bHasGimbalTarget)
+	{
+		// 云台指令目标优先于时间微动
+		GimbalState = UAVPayloadMath::ApplyGimbalTarget(GimbalState, GimbalTargetPitch, GimbalTargetYaw);
+	}
+
+	// 拍照自动结束：拍照中状态持续 3 秒后复位
+	if (bPhotoTaking)
+	{
+		PhotoTakingRemainingSeconds -= DeltaTime;
+		if (PhotoTakingRemainingSeconds <= 0.0)
+		{
+			bPhotoTaking = false;
+			PhotoTakingRemainingSeconds = 0.0;
+		}
+	}
 
 	if (bMissionActive && !bMissionPaused)
 	{

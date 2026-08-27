@@ -89,6 +89,11 @@ void UUAVMqttBridgeComponent::BeginPlay()
 	{
 		CameraStream = GetOwner() ? GetOwner()->GetComponentByClass<UUAVCameraStreamComponent>() : nullptr;
 	}
+	// 载荷指令由 UAVCameraStream 处理，注入无人机模拟组件作为载荷状态源
+	if (CameraStream)
+	{
+		CameraStream->SetDroneSim(DroneSim);
+	}
 
 	// 绑定飞控/相机事件委托，回调转发为上云 API 事件
 	if (FlightControl)
@@ -96,6 +101,7 @@ void UUAVMqttBridgeComponent::BeginPlay()
 		FlightControl->OnCommandResult.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlightCommandResult);
 		FlightControl->OnTakeoffProgress.AddDynamic(this, &UUAVMqttBridgeComponent::OnTakeoffProgress);
 		FlightControl->OnFlighttaskProgress.AddDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskProgress);
+		FlightControl->OnReturnHomeStatus.AddDynamic(this, &UUAVMqttBridgeComponent::OnReturnHomeStatus);
 	}
 	if (CameraStream)
 	{
@@ -117,6 +123,7 @@ void UUAVMqttBridgeComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		FlightControl->OnCommandResult.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlightCommandResult);
 		FlightControl->OnTakeoffProgress.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnTakeoffProgress);
 		FlightControl->OnFlighttaskProgress.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnFlighttaskProgress);
+		FlightControl->OnReturnHomeStatus.RemoveDynamic(this, &UUAVMqttBridgeComponent::OnReturnHomeStatus);
 	}
 	if (CameraStream)
 	{
@@ -278,6 +285,8 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 	const bool bIsFlightCommand = Method.StartsWith(TEXT("flight_")) || Method.StartsWith(TEXT("takeoff_"))
 		|| Method.StartsWith(TEXT("return_home"));
 	const bool bIsLiveCommand = Method.StartsWith(TEXT("live_"));
+	const bool bIsPayloadCommand = Method.StartsWith(TEXT("camera_")) || Method.StartsWith(TEXT("payload_"))
+		|| Method.StartsWith(TEXT("gimbal_"));
 
 	if (bIsFlightCommand && FlightControl)
 	{
@@ -286,6 +295,15 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 	else if (bIsLiveCommand && CameraStream)
 	{
 		Result = CameraStream->HandleCommand(Method, DataJson);
+	}
+	else if (bIsPayloadCommand && CameraStream)
+	{
+		Result = CameraStream->HandleCommand(Method, DataJson);
+		// 载荷权抢占成功后补发载荷控制源 state（对齐 dock report_control_source.py）
+		if (Method == kMethodPayloadAuthorityGrab && Result == UAV::FlightControlResult::Success)
+		{
+			PublishPayloadControlSource();
+		}
 	}
 	else
 	{
@@ -370,6 +388,34 @@ void UUAVMqttBridgeComponent::PublishOnlineStatus(bool bOnline)
 		Msg.Topic = Topic;
 		Msg.SetPayloadFromString(Json);
 		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+	}
+}
+
+void UUAVMqttBridgeComponent::PublishPayloadControlSource()
+{
+	if (!MqttClient || !bConnected)
+	{
+		return;
+	}
+	const TSharedRef<FJsonObject> State = MakeTelemetryHeader();
+	State->SetStringField(TEXT("gateway"), DockSn);
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("control_source"), TEXT("A"));
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(TEXT("control_source"), TEXT("A"));
+	Payload->SetStringField(TEXT("payload_index"), CameraIndex);
+	Data->SetArrayField(TEXT("payloads"), { MakeShared<FJsonValueObject>(Payload) });
+	State->SetObjectField(TEXT("data"), Data);
+
+	const FString Topic = MakeTopic(kTopicStateTemplate, DroneSn);
+	const FString Json = SerializeJson(State);
+	if (!Json.IsEmpty())
+	{
+		FMQTTClientMessage Msg;
+		Msg.Topic = Topic;
+		Msg.SetPayloadFromString(Json);
+		MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布载荷控制源 state：%s"), *Json);
 	}
 }
 
@@ -460,6 +506,16 @@ void UUAVMqttBridgeComponent::OnLiveCommandResult(const FString& InMethod, int32
 	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 直播指令 %s 结果=%d"), *InMethod, InResult);
 }
 
+void UUAVMqttBridgeComponent::OnReturnHomeStatus(const FString& InStatus, const FString& InReason)
+{
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), 0);
+	Data->SetStringField(TEXT("status"), InStatus);
+	Data->SetStringField(TEXT("reason"), InReason);
+	PublishEvent(kEventReturnHomeStatus, Data);
+	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 发布返航状态事件：status=%s reason=%s"), *InStatus, *InReason);
+}
+
 // ---- OSD 组装 ----
 
 TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDroneOsdPayload() const
@@ -531,11 +587,11 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDroneOsdPayload() const
 	const TSharedRef<FJsonObject> Camera = MakeShared<FJsonObject>();
 	Camera->SetNumberField(TEXT("payload_index"), 0);
 	Camera->SetNumberField(TEXT("camera_mode"), DroneSim->GetCameraMode());
-	Camera->SetNumberField(TEXT("photo_state"), 0);
+	Camera->SetNumberField(TEXT("photo_state"), DroneSim->IsPhotoTaking() ? 1 : 0);
 	Camera->SetNumberField(TEXT("recording_state"), DroneSim->IsRecording() ? 1 : 0);
 	Camera->SetNumberField(TEXT("zoom_factor"), DroneSim->GetZoomFactor());
 	Camera->SetNumberField(TEXT("ir_zoom_factor"), 2.0);
-	Camera->SetNumberField(TEXT("remain_photo_num"), 9999);
+	Camera->SetNumberField(TEXT("remain_photo_num"), DroneSim->GetRemainingPhotoNum());
 	Camera->SetNumberField(TEXT("remain_record_duration"), FMath::Max(0.0, 5400.0 - DroneSim->GetRecordingTimeSeconds()));
 	Camera->SetNumberField(TEXT("record_time"), DroneSim->GetRecordingTimeSeconds());
 	Camera->SetNumberField(TEXT("zoom_focus_mode"), 0);

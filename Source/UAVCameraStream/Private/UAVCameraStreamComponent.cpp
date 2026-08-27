@@ -19,6 +19,10 @@ namespace
 	constexpr int32 kResultInvalidParams = 3;
 	constexpr int32 kResultUnknownMethod = 4;
 	constexpr int32 kResultFfmpegUnavailable = 5;
+	/** 载荷组件未注入无人机模拟（内部错误） */
+	constexpr int32 kResultInternalError = 6;
+	/** 未抢占载荷权（对齐飞控 NoAuthority result=2） */
+	constexpr int32 kResultNoAuthority = 2;
 
 	bool TryParseJsonObject(const FString& InJson, TSharedPtr<FJsonObject>& OutObject)
 	{
@@ -54,6 +58,11 @@ namespace
 UUAVCameraStreamComponent::UUAVCameraStreamComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
+}
+
+void UUAVCameraStreamComponent::SetDroneSim(UUAVDroneSimComponent* InDroneSim)
+{
+	DroneSim = InDroneSim;
 }
 
 void UUAVCameraStreamComponent::BeginPlay()
@@ -169,6 +178,58 @@ int32 UUAVCameraStreamComponent::HandleCommand(const FString& InMethod, const FS
 	else if (Method == kMethodLiveLensChange)
 	{
 		Result = HandleLiveLensChange(Data);
+	}
+	else if (Method == kMethodPayloadAuthorityGrab
+		|| Method == kMethodCameraModeSwitch
+		|| Method == kMethodCameraPhotoTake
+		|| Method == kMethodCameraPhotoStop
+		|| Method == kMethodCameraRecordingStart
+		|| Method == kMethodCameraRecordingStop
+		|| Method == kMethodCameraAim
+		|| Method == kMethodGimbalReset)
+	{
+		if (!DroneSim)
+		{
+			Result = kResultInternalError;
+		}
+		else if (Method == kMethodPayloadAuthorityGrab)
+		{
+			Result = HandlePayloadAuthorityGrab(Data);
+		}
+		else if (!DroneSim->HasPayloadAuthority())
+		{
+			// 载荷权校验：未抢占时拒绝拍照/录像/云台指令
+			Result = kResultNoAuthority;
+			UE_LOG(LogTemp, Warning, TEXT("[UAVCameraStream] 载荷指令 %s 被拒绝：未抢占载荷权"), *Method);
+		}
+		else if (Method == kMethodCameraModeSwitch)
+		{
+			Result = HandleCameraModeSwitch(Data);
+		}
+		else if (Method == kMethodCameraPhotoTake)
+		{
+			Result = HandleCameraPhotoTake(Data);
+		}
+		else if (Method == kMethodCameraPhotoStop)
+		{
+			Result = HandleCameraPhotoStop(Data);
+		}
+		else if (Method == kMethodCameraRecordingStart)
+		{
+			Result = HandleCameraRecordingStart(Data);
+		}
+		else if (Method == kMethodCameraRecordingStop)
+		{
+			Result = HandleCameraRecordingStop(Data);
+		}
+		else if (Method == kMethodCameraAim)
+		{
+			Result = HandleCameraAim(Data);
+		}
+		else if (Method == kMethodGimbalReset)
+		{
+			Result = HandleGimbalReset(Data);
+		}
 	}
 
 	OnCommandResult.Broadcast(Method, Result);
@@ -348,6 +409,68 @@ int32 UUAVCameraStreamComponent::HandleLiveLensChange(const TSharedPtr<FJsonObje
 	}
 	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 镜头切换：%s -> %s"), *OldVideoId, *Session->VideoId);
 	OnLiveStatusChanged.Broadcast(Session->VideoId);
+	return kResultSuccess;
+}
+
+// ---- 载荷指令处理 ----
+
+int32 UUAVCameraStreamComponent::HandlePayloadAuthorityGrab(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->SetPayloadAuthority(true);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 载荷权已抢占（控制源 A）"));
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraModeSwitch(const TSharedPtr<FJsonObject>& InData)
+{
+	const int32 Mode = static_cast<int32>(ReadNumber(InData, TEXT("camera_mode")));
+	DroneSim->SetCameraMode(Mode);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 相机模式切换：%d"), DroneSim->GetCameraMode());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraPhotoTake(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->TakePhoto();
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 拍照：剩余=%d 累计=%d"),
+		DroneSim->GetRemainingPhotoNum(), DroneSim->GetTakenPhotoCount());
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraPhotoStop(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->SetPhotoTaking(false);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 拍照结束"));
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraRecordingStart(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->StartRecording();
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 开始录像（指令覆盖）"));
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraRecordingStop(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->StopRecording();
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 停止录像（指令覆盖）"));
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleCameraAim(const TSharedPtr<FJsonObject>& InData)
+{
+	const double Pitch = ReadNumber(InData, TEXT("gimbal_pitch"));
+	const double Yaw = ReadNumber(InData, TEXT("gimbal_yaw"));
+	DroneSim->SetGimbalTarget(Pitch, Yaw);
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 云台瞄准：pitch=%.1f yaw=%.1f"), Pitch, Yaw);
+	return kResultSuccess;
+}
+
+int32 UUAVCameraStreamComponent::HandleGimbalReset(const TSharedPtr<FJsonObject>& InData)
+{
+	DroneSim->ResetGimbalTarget();
+	UE_LOG(LogTemp, Log, TEXT("[UAVCameraStream] 云台复位"));
 	return kResultSuccess;
 }
 

@@ -30,6 +30,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FUAVTakeoffProgressDelegate, const
 /** 航线任务进度事件（Status: sent / in_progress / ok / paused / rejected / failed / canceled / timeout / partially_done） */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FUAVFlighttaskProgressDelegate, const FString&, Status, const FString&, FlightId, int32, CurrentWaypointIndex, int32, Percent);
 
+/** 返航状态事件（Status: rth_auto_trigger 等；Reason: battery_low 等） */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FUAVReturnHomeStatusDelegate, const FString&, Status, const FString&, Reason);
+
 /** 航线任务条目：flighttask_create/prepare 阶段登记，execute 时消费 */
 struct FUAVMissionEntry
 {
@@ -95,8 +98,13 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
 	FUAVFlighttaskProgressDelegate OnFlighttaskProgress;
 
+	/** 返航状态事件（自动返航触发/人工返航状态） */
+	UPROPERTY(BlueprintAssignable, Category = "UAV|FlightControl|Event")
+	FUAVReturnHomeStatusDelegate OnReturnHomeStatus;
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	// ---- 指令处理（按 method 分发） ----
 	int32 HandleAuthorityGrab(const TSharedPtr<FJsonObject>& InData);
@@ -114,6 +122,9 @@ protected:
 	/** 状态迁移：同步飞控状态与无人机模拟组件 */
 	void TransitionTo(EUAVFlightState InNewState);
 
+	/** 启动返航：中断当前任务并飞回机场（返航高度）；状态冲突返回 StateConflict */
+	int32 StartReturnHome();
+
 	/** 以当前位置为中心生成 100 米方形演示航线（未注入航线文件时的兜底） */
 	void BuildDefaultWayline(TArray<FUAVWaypoint>& OutWaypoints, const FUAVGeoCoordinate& InCenter, double InAltitude) const;
 
@@ -126,6 +137,10 @@ protected:
 
 	UFUNCTION()
 	void OnDroneMissionFinished();
+
+	/** 低电量事件回调：满足条件时自动返航并广播 OnReturnHomeStatus */
+	UFUNCTION()
+	void OnDroneBatteryLow(double CapacityPercent);
 
 	/** 关联的无人机模拟组件 */
 	UPROPERTY()
@@ -146,4 +161,7 @@ private:
 
 	/** 已登记的航线任务（flighttask_create/prepare） */
 	TMap<FString, FUAVMissionEntry> Missions;
+
+	/** 自动返航已触发（防抖：返航/降落期间不重复触发） */
+	bool bReturnHomePending = false;
 };

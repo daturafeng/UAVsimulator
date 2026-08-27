@@ -52,11 +52,23 @@ void UUAVFlightControlComponent::BeginPlay()
 	{
 		DroneSim->OnWaypointReached.AddDynamic(this, &UUAVFlightControlComponent::OnDroneWaypointReached);
 		DroneSim->OnMissionFinished.AddDynamic(this, &UUAVFlightControlComponent::OnDroneMissionFinished);
+		DroneSim->OnBatteryLow.AddDynamic(this, &UUAVFlightControlComponent::OnDroneBatteryLow);
 	}
 	else
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[UAVFlightControl] DroneSim 未注入，飞行指令将无法执行"));
 	}
+}
+
+void UUAVFlightControlComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (DroneSim)
+	{
+		DroneSim->OnWaypointReached.RemoveDynamic(this, &UUAVFlightControlComponent::OnDroneWaypointReached);
+		DroneSim->OnMissionFinished.RemoveDynamic(this, &UUAVFlightControlComponent::OnDroneMissionFinished);
+		DroneSim->OnBatteryLow.RemoveDynamic(this, &UUAVFlightControlComponent::OnDroneBatteryLow);
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 void UUAVFlightControlComponent::SetDroneSim(UUAVDroneSimComponent* InDroneSim)
@@ -300,24 +312,8 @@ int32 UUAVFlightControlComponent::HandleFlighttaskRecovery(const TSharedPtr<FJso
 int32 UUAVFlightControlComponent::HandleReturnHome(const TSharedPtr<FJsonObject>& InData)
 {
 	using namespace UAV::FlightControlResult;
-	if (!DroneSim) return InternalError;
 	if (!bHasFlightAuthority) return NoAuthority;
-	if (FlightState == EUAVFlightState::ReturnHome || FlightState == EUAVFlightState::Landing) return StateConflict;
-
-	// 中断当前任务，飞回机场（返航高度）
-	DroneSim->StopMission();
-	TArray<FUAVWaypoint> Waypoints;
-	FUAVWaypoint Home;
-	Home.Latitude = DroneSim->AirportOrigin.Latitude;
-	Home.Longitude = DroneSim->AirportOrigin.Longitude;
-	Home.Altitude = CurrentRthAltitude;
-	Home.ArrivalThresholdMeters = DroneSim->DefaultArrivalThresholdMeters;
-	Waypoints.Add(Home);
-
-	TransitionTo(EUAVFlightState::ReturnHome);
-	DroneSim->SetWaypoints(Waypoints, true);
-	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 返航开始：返航高度=%.1fm"), CurrentRthAltitude);
-	return Success;
+	return StartReturnHome();
 }
 
 int32 UUAVFlightControlComponent::HandleReturnHomeCancel(const TSharedPtr<FJsonObject>& InData)
@@ -340,6 +336,32 @@ void UUAVFlightControlComponent::TransitionTo(EUAVFlightState InNewState)
 	{
 		DroneSim->SetFlightState(InNewState);
 	}
+}
+
+int32 UUAVFlightControlComponent::StartReturnHome()
+{
+	using namespace UAV::FlightControlResult;
+	if (!DroneSim) return InternalError;
+	// 返航/降落中不重复触发
+	if (FlightState == EUAVFlightState::ReturnHome || FlightState == EUAVFlightState::Landing)
+	{
+		return StateConflict;
+	}
+
+	// 中断当前任务，飞回机场（返航高度）
+	DroneSim->StopMission();
+	TArray<FUAVWaypoint> Waypoints;
+	FUAVWaypoint Home;
+	Home.Latitude = DroneSim->AirportOrigin.Latitude;
+	Home.Longitude = DroneSim->AirportOrigin.Longitude;
+	Home.Altitude = CurrentRthAltitude;
+	Home.ArrivalThresholdMeters = DroneSim->DefaultArrivalThresholdMeters;
+	Waypoints.Add(Home);
+
+	TransitionTo(EUAVFlightState::ReturnHome);
+	DroneSim->SetWaypoints(Waypoints, true);
+	UE_LOG(LogTemp, Log, TEXT("[UAVFlightControl] 返航开始：返航高度=%.1fm"), CurrentRthAltitude);
+	return Success;
 }
 
 void UUAVFlightControlComponent::BuildDefaultWayline(TArray<FUAVWaypoint>& OutWaypoints, const FUAVGeoCoordinate& InCenter, double InAltitude) const
@@ -415,6 +437,30 @@ void UUAVFlightControlComponent::OnDroneMissionFinished()
 	}
 	else if (FlightState == EUAVFlightState::Landing)
 	{
+		bReturnHomePending = false;
 		TransitionTo(EUAVFlightState::Idle);
+	}
+}
+
+void UUAVFlightControlComponent::OnDroneBatteryLow(double CapacityPercent)
+{
+	// 仅持有飞控权、处于空中状态（起飞/航线/巡航）且未在返航流程中时触发
+	if (!bHasFlightAuthority || bReturnHomePending)
+	{
+		return;
+	}
+	if (FlightState != EUAVFlightState::TakingOff
+		&& FlightState != EUAVFlightState::Wayline
+		&& FlightState != EUAVFlightState::Flying)
+	{
+		return;
+	}
+
+	const int32 Result = StartReturnHome();
+	if (Result == UAV::FlightControlResult::Success)
+	{
+		bReturnHomePending = true;
+		OnReturnHomeStatus.Broadcast(TEXT("rth_auto_trigger"), TEXT("battery_low"));
+		UE_LOG(LogTemp, Warning, TEXT("[UAVFlightControl] 低电量自动返航：当前电量=%.1f%%"), CapacityPercent);
 	}
 }

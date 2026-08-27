@@ -32,6 +32,14 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kMethodLiveStopPush;			// live_stop_push
 	UAVCORE_API extern const TCHAR* kMethodLiveSetQuality;			// live_set_quality
 	UAVCORE_API extern const TCHAR* kMethodLiveLensChange;			// live_lens_change
+	UAVCORE_API extern const TCHAR* kMethodPayloadAuthorityGrab;	// payload_authority_grab
+	UAVCORE_API extern const TCHAR* kMethodCameraModeSwitch;		// camera_mode_switch
+	UAVCORE_API extern const TCHAR* kMethodCameraPhotoTake;			// camera_photo_take
+	UAVCORE_API extern const TCHAR* kMethodCameraPhotoStop;			// camera_photo_stop
+	UAVCORE_API extern const TCHAR* kMethodCameraRecordingStart;	// camera_recording_start
+	UAVCORE_API extern const TCHAR* kMethodCameraRecordingStop;		// camera_recording_stop
+	UAVCORE_API extern const TCHAR* kMethodCameraAim;				// camera_aim
+	UAVCORE_API extern const TCHAR* kMethodGimbalReset;				// gimbal_reset
 
 	// ---- 默认设备标识（首期联调口径，与 dock script 一致）----
 	UAVCORE_API extern const TCHAR* kDefaultDockSn;			// DOCK3TEST001
@@ -42,6 +50,7 @@ namespace UAV::CloudApi
 	// ---- 事件 method ----
 	UAVCORE_API extern const TCHAR* kEventTakeoffToPointProgress;	// takeoff_to_point_progress
 	UAVCORE_API extern const TCHAR* kEventFlighttaskProgress;		// flighttask_progress
+	UAVCORE_API extern const TCHAR* kEventReturnHomeStatus;			// return_home_status
 
 	// ---- 视频清晰度档位（与上云 API video_quality 语义一致）----
 	/** 推流参数（分辨率/码率/帧率） */

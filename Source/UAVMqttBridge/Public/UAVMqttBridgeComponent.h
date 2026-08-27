@@ -149,6 +149,9 @@ protected:
 	/** 发布在线状态（sys/product/{DockSn}/status） */
 	void PublishOnlineStatus(bool bOnline);
 
+	/** 发布载荷控制源（thing/product/{DroneSn}/state，对齐 dock report_control_source.py） */
+	void PublishPayloadControlSource();
+
 	// ---- 事件回调（BeginPlay 时绑定飞控/相机委托） ----
 	UFUNCTION()
 	void OnFlightCommandResult(const FString& InMethod, int32 InResult);
@@ -164,6 +167,9 @@ protected:
 
 	UFUNCTION()
 	void OnLiveCommandResult(const FString& InMethod, int32 InResult);
+
+	UFUNCTION()
+	void OnReturnHomeStatus(const FString& InStatus, const FString& InReason);
 
 	// ---- OSD 组装 ----
 	/** 从无人机模拟组件读取遥测，组装无人机 OSD data（对齐 dock report_drone_osd.py） */

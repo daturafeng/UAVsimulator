@@ -78,6 +78,15 @@ namespace UAVPayloadMath
 		return Result;
 	}
 
+	FUAVGimbalState ApplyGimbalTarget(const FUAVGimbalState& InBase, double InTargetPitchDegrees, double InTargetYawDegrees)
+	{
+		FUAVGimbalState Result = InBase;
+		// 俯仰为有符号角（负=低头）原样保留；偏航按 0-360 归一化（对齐云台基础推导）
+		Result.PitchDegrees = InTargetPitchDegrees;
+		Result.YawDegrees = NormalizeDegrees(InTargetYawDegrees);
+		return Result;
+	}
+
 	int32 ComputeWindDirectionEnum(double InDegrees)
 	{
 		const double Normalized = NormalizeDegrees(InDegrees);
