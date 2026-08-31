@@ -172,6 +172,121 @@ namespace
 		}
 		return true;
 	}
+
+	/** 从 JSON 对象安全读取字符串数组字段（缺失或类型不符返回空数组） */
+	TArray<FString> GetDeviceStringArrayField(const TSharedPtr<FJsonObject>& InObject, const FString& InKey)
+	{
+		TArray<FString> Values;
+		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
+		if (InObject.IsValid() && InObject->TryGetArrayField(InKey, Array))
+		{
+			for (const TSharedPtr<FJsonValue>& Item : *Array)
+			{
+				if (Item.IsValid() && Item->Type == EJson::String)
+				{
+					Values.Add(Item->AsString());
+				}
+			}
+		}
+		return Values;
+	}
+
+	/** 校验云端控制权限键列表：非空且仅含 flight/payload（对齐 CloudControlAuthRequest control_keys 语义） */
+	bool IsValidControlKeys(const TArray<FString>& InControlKeys)
+	{
+		if (InControlKeys.Num() == 0)
+		{
+			return false;
+		}
+		for (const FString& Key : InControlKeys)
+		{
+			if (Key != TEXT("flight") && Key != TEXT("payload"))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** 校验日志模块列表：1-2 项且每项为 "0"=无人机 / "3"=机场（对齐 FileUploadUpdateRequest @Size 与 LogModuleEnum） */
+	bool IsValidModuleList(const TArray<FString>& InModuleList)
+	{
+		if (InModuleList.Num() < 1 || InModuleList.Num() > 2)
+		{
+			return false;
+		}
+		for (const FString& Module : InModuleList)
+		{
+			if (Module != TEXT("0") && Module != TEXT("3"))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** 校验日志文件索引项：bootIndex / startTime / endTime / size 均为数字（对齐 LogFileIndex @NotNull） */
+	bool IsValidLogFileIndex(const TSharedPtr<FJsonObject>& InIndex)
+	{
+		if (!InIndex.IsValid())
+		{
+			return false;
+		}
+		const TSharedPtr<FJsonValue> BootIndex = InIndex->TryGetField(TEXT("bootIndex"));
+		const TSharedPtr<FJsonValue> StartTime = InIndex->TryGetField(TEXT("startTime"));
+		const TSharedPtr<FJsonValue> EndTime = InIndex->TryGetField(TEXT("endTime"));
+		const TSharedPtr<FJsonValue> Size = InIndex->TryGetField(TEXT("size"));
+		return BootIndex.IsValid() && BootIndex->Type == EJson::Number
+			&& StartTime.IsValid() && StartTime->Type == EJson::Number
+			&& EndTime.IsValid() && EndTime->Type == EJson::Number
+			&& Size.IsValid() && Size->Type == EJson::Number;
+	}
+
+	/** 校验日志文件项：deviceSn / module / objectKey 非空且 list 为 1+ 个合法索引（对齐 FileUploadStartFile @NotNull） */
+	bool IsValidUploadStartFile(const TSharedPtr<FJsonObject>& InFile)
+	{
+		if (!InFile.IsValid())
+		{
+			return false;
+		}
+		const FString Module = GetDeviceStringField(InFile, TEXT("module"));
+		const TArray<TSharedPtr<FJsonValue>>* Indexes = nullptr;
+		if (GetDeviceStringField(InFile, TEXT("deviceSn")).IsEmpty()
+			|| GetDeviceStringField(InFile, TEXT("objectKey")).IsEmpty()
+			|| (Module != TEXT("0") && Module != TEXT("3"))
+			|| !InFile->TryGetArrayField(TEXT("list"), Indexes) || Indexes->Num() < 1)
+		{
+			return false;
+		}
+		for (const TSharedPtr<FJsonValue>& IndexValue : *Indexes)
+		{
+			if (!IndexValue.IsValid() || IndexValue->Type != EJson::Object
+				|| !IsValidLogFileIndex(IndexValue->AsObject()))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** 校验飞行任务 ID 格式：非空且不含 < > : " / | ? * . _ \ 等字符（对齐 UploadFlighttaskMediaPrioritize flightId 的 @Pattern） */
+	bool IsValidFlightId(const FString& InFlightId)
+	{
+		if (InFlightId.IsEmpty())
+		{
+			return false;
+		}
+		for (const TCHAR Char : InFlightId)
+		{
+			if (Char == TEXT('<') || Char == TEXT('>') || Char == TEXT(':') || Char == TEXT('"')
+				|| Char == TEXT('/') || Char == TEXT('|') || Char == TEXT('?') || Char == TEXT('*')
+				|| Char == TEXT('.') || Char == TEXT('_') || Char == TEXT('\\'))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
 }
 
 UUAVMqttBridgeComponent::UUAVMqttBridgeComponent()
@@ -523,6 +638,118 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 			PublishDockFirmwareVersion();
 			PublishDroneFirmwareVersion();
 			PublishPayloadFirmwareVersion();
+		}
+		else
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
+	else if (Method == kMethodCloudControlAuthRequest)
+	{
+		// 云端控制权授权请求：校验 user_id / user_callsign / control_keys，成功后回执 sent 并模拟飞手同意发布授权事件（对齐 AbstractControlService.cloudControlAuthRequest）
+		Result = HandleCloudControlAuthRequest(Method, DataJson);
+		if (Result == UAV::FlightControlResult::Success)
+		{
+			const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+			Output->SetStringField(TEXT("status"), TEXT("sent"));
+			PublishServicesReply(Method, Tid, Bid, Result, InSn, Output);
+			PublishEvent(kEventCloudControlAuthNotify, BuildCloudControlAuthNotifyData(TEXT("ok"), 0));
+		}
+		else
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
+	else if (Method == kMethodCloudControlRelease)
+	{
+		// 云端控制权释放：校验 control_keys，成功后回执 sent（对齐 AbstractControlService.cloudControlRelease）
+		Result = HandleCloudControlRelease(Method, DataJson);
+		if (Result == UAV::FlightControlResult::Success)
+		{
+			const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+			Output->SetStringField(TEXT("status"), TEXT("sent"));
+			PublishServicesReply(Method, Tid, Bid, Result, InSn, Output);
+		}
+		else
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
+	else if (Method == kMethodFileUploadStart)
+	{
+		// 日志文件上传启动：校验上传参数，成功后回执 sent 并同步发布 sent → ok 两段进度事件（对齐 AbstractLogService.fileuploadStart）
+		Result = HandleFileUploadStart(Method, DataJson);
+		if (Result == UAV::FlightControlResult::Success)
+		{
+			const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+			Output->SetStringField(TEXT("status"), TEXT("sent"));
+			PublishServicesReply(Method, Tid, Bid, Result, InSn, Output);
+			PublishEvent(kEventFileUploadProgress, BuildFileUploadProgressEventData(TEXT("sent"), 0, TEXT("3"), DockSn));
+			PublishEvent(kEventFileUploadProgress, BuildFileUploadProgressEventData(TEXT("ok"), 100, TEXT("3"), DockSn));
+		}
+		else
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
+	else if (Method == kMethodFileUploadUpdate)
+	{
+		// 日志上传状态更新：仅支持 cancel，成功后回执 sent（不发布事件，对齐 AbstractLogService.fileuploadUpdate）
+		Result = HandleFileUploadUpdate(Method, DataJson);
+		if (Result == UAV::FlightControlResult::Success)
+		{
+			const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+			Output->SetStringField(TEXT("status"), TEXT("sent"));
+			PublishServicesReply(Method, Tid, Bid, Result, InSn, Output);
+		}
+		else
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
+	else if (Method == kMethodFileUploadList)
+	{
+		// 可上传日志文件列表查询：校验 moduleList，成功后回执合成文件列表 output.files（对齐 FileUploadListResponse）
+		Result = HandleFileUploadList(Method, DataJson);
+		if (Result == UAV::FlightControlResult::Success)
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn, BuildFileUploadListOutput());
+		}
+		else
+		{
+			PublishServicesReply(Method, Tid, Bid, Result, InSn);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
+	else if (Method == kMethodMediaPrioritize)
+	{
+		// 媒体任务上传优先级：校验 flight_id，成功后回执 sent 并发布优先级事件（对齐 AbstractMediaService.uploadFlighttaskMediaPrioritize）
+		Result = HandleMediaPrioritize(Method, DataJson);
+		if (Result == UAV::FlightControlResult::Success)
+		{
+			const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+			Output->SetStringField(TEXT("status"), TEXT("sent"));
+			PublishServicesReply(Method, Tid, Bid, Result, InSn, Output);
+			FString FlightId;
+			{
+				TSharedPtr<FJsonObject> Data;
+				if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(DataJson), Data) && Data.IsValid())
+				{
+					FlightId = Data->GetStringField(TEXT("flight_id"));
+				}
+			}
+			PublishEvent(kEventMediaPrioritize, BuildMediaPrioritizeEventData(FlightId));
 		}
 		else
 		{
@@ -1942,6 +2169,269 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildPayloadFirmwareVersionData
 	Payload->SetStringField(TEXT("firmware_version"), PayloadFirmwareVersion);
 	Data->SetObjectField(CameraIndex, Payload);
 	return Data;
+}
+
+int32 UUAVMqttBridgeComponent::HandleCloudControlAuthRequest(const FString& InMethod, const FString& InDataJson)
+{
+	using namespace UAV::FlightControlResult;
+
+	// 仅支持 cloud_control_auth_request（分发入口已精确匹配，此处双保险）
+	if (InMethod != kMethodCloudControlAuthRequest)
+	{
+		return UnknownMethod;
+	}
+
+	// 解析 data：{user_id, user_callsign, control_keys}（对齐 CloudControlAuthRequest）
+	TSharedPtr<FJsonObject> Data;
+	if (InDataJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+	{
+		return InvalidParams;
+	}
+
+	// user_id / user_callsign 非空且 control_keys 仅支持 flight/payload（对齐 ControlKeyEnum）
+	if (GetDeviceStringField(Data, TEXT("user_id")).IsEmpty()
+		|| GetDeviceStringField(Data, TEXT("user_callsign")).IsEmpty()
+		|| !IsValidControlKeys(GetDeviceStringArrayField(Data, TEXT("control_keys"))))
+	{
+		return InvalidParams;
+	}
+	return Success;
+}
+
+int32 UUAVMqttBridgeComponent::HandleCloudControlRelease(const FString& InMethod, const FString& InDataJson)
+{
+	using namespace UAV::FlightControlResult;
+
+	if (InMethod != kMethodCloudControlRelease)
+	{
+		return UnknownMethod;
+	}
+
+	// 解析 data：{control_keys}（对齐 CloudControlReleaseRequest）
+	TSharedPtr<FJsonObject> Data;
+	if (InDataJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+	{
+		return InvalidParams;
+	}
+
+	// control_keys 非空且仅支持 flight/payload
+	if (!IsValidControlKeys(GetDeviceStringArrayField(Data, TEXT("control_keys"))))
+	{
+		return InvalidParams;
+	}
+	return Success;
+}
+
+int32 UUAVMqttBridgeComponent::HandleFileUploadStart(const FString& InMethod, const FString& InDataJson)
+{
+	using namespace UAV::FlightControlResult;
+
+	if (InMethod != kMethodFileUploadStart)
+	{
+		return UnknownMethod;
+	}
+
+	// 解析 data：{bucket, credentials, endpoint, fileStoreDir, provider, params:{files}, region}（对齐 FileUploadStartRequest）
+	TSharedPtr<FJsonObject> Data;
+	if (InDataJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+	{
+		return InvalidParams;
+	}
+
+	// 必填字符串字段非空
+	if (GetDeviceStringField(Data, TEXT("bucket")).IsEmpty()
+		|| GetDeviceStringField(Data, TEXT("endpoint")).IsEmpty()
+		|| GetDeviceStringField(Data, TEXT("fileStoreDir")).IsEmpty()
+		|| GetDeviceStringField(Data, TEXT("provider")).IsEmpty()
+		|| GetDeviceStringField(Data, TEXT("region")).IsEmpty())
+	{
+		return InvalidParams;
+	}
+
+	// credentials 必须是非空对象（对齐 FileUploadCredentials）
+	const TSharedPtr<FJsonObject> Credentials = Data->GetObjectField(TEXT("credentials"));
+	if (!Credentials.IsValid() || Credentials->Values.Num() == 0)
+	{
+		return InvalidParams;
+	}
+
+	// params.files 必须是 1-2 个合法日志文件（对齐 FileUploadStartParams @Size(min=1, max=2)）
+	const TSharedPtr<FJsonObject> Params = Data->GetObjectField(TEXT("params"));
+	const TArray<TSharedPtr<FJsonValue>>* Files = nullptr;
+	if (!Params.IsValid() || !Params->TryGetArrayField(TEXT("files"), Files)
+		|| Files->Num() < 1 || Files->Num() > 2)
+	{
+		return InvalidParams;
+	}
+	for (const TSharedPtr<FJsonValue>& FileValue : *Files)
+	{
+		if (!FileValue.IsValid() || FileValue->Type != EJson::Object
+			|| !IsValidUploadStartFile(FileValue->AsObject()))
+		{
+			return InvalidParams;
+		}
+	}
+	return Success;
+}
+
+int32 UUAVMqttBridgeComponent::HandleFileUploadUpdate(const FString& InMethod, const FString& InDataJson)
+{
+	using namespace UAV::FlightControlResult;
+
+	if (InMethod != kMethodFileUploadUpdate)
+	{
+		return UnknownMethod;
+	}
+
+	// 解析 data：{moduleList, status}（对齐 FileUploadUpdateRequest）
+	TSharedPtr<FJsonObject> Data;
+	if (InDataJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+	{
+		return InvalidParams;
+	}
+
+	// moduleList 1-2 项且每项 0/3；status 仅支持 cancel（对齐 FileUploadUpdateStatusEnum）
+	if (!IsValidModuleList(GetDeviceStringArrayField(Data, TEXT("moduleList")))
+		|| GetDeviceStringField(Data, TEXT("status")) != TEXT("cancel"))
+	{
+		return InvalidParams;
+	}
+	return Success;
+}
+
+int32 UUAVMqttBridgeComponent::HandleFileUploadList(const FString& InMethod, const FString& InDataJson)
+{
+	using namespace UAV::FlightControlResult;
+
+	if (InMethod != kMethodFileUploadList)
+	{
+		return UnknownMethod;
+	}
+
+	// 解析 data：{moduleList}（对齐 FileUploadListRequest）
+	TSharedPtr<FJsonObject> Data;
+	if (InDataJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+	{
+		return InvalidParams;
+	}
+
+	// moduleList 1-2 项且每项 0/3
+	if (!IsValidModuleList(GetDeviceStringArrayField(Data, TEXT("moduleList"))))
+	{
+		return InvalidParams;
+	}
+	return Success;
+}
+
+int32 UUAVMqttBridgeComponent::HandleMediaPrioritize(const FString& InMethod, const FString& InDataJson)
+{
+	using namespace UAV::FlightControlResult;
+
+	if (InMethod != kMethodMediaPrioritize)
+	{
+		return UnknownMethod;
+	}
+
+	// 解析 data：{flight_id}（对齐 UploadFlighttaskMediaPrioritize）
+	TSharedPtr<FJsonObject> Data;
+	if (InDataJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InDataJson), Data) || !Data.IsValid())
+	{
+		return InvalidParams;
+	}
+
+	// flight_id 非空且符合 @Pattern（排除 < > : " / | ? * . _ \）
+	if (!IsValidFlightId(GetDeviceStringField(Data, TEXT("flight_id"))))
+	{
+		return InvalidParams;
+	}
+	return Success;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildCloudControlAuthNotifyData(const FString& InStatus, int32 InResult) const
+{
+	// 对齐 dock EventsDataRequest<CloudControlAuthNotify>：data={result:0, output:{status, result}}
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), 0);
+	const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+	Output->SetStringField(TEXT("status"), InStatus);
+	Output->SetNumberField(TEXT("result"), InResult);
+	Data->SetObjectField(TEXT("output"), Output);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildFileUploadProgressEventData(const FString& InStatus, int32 InProgressPercent, const FString& InModule, const FString& InDeviceSn) const
+{
+	// 对齐 dock EventsDataRequest<FileUploadProgress>：data={result:0, output:{status, ext:{files:[FileUploadProgressFile]}}}
+	// 每项 files[i].progress 需携带 currentStep / totalStep / progress / finishTime / uploadRate / status / result（sample 逐字段读取）
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("result"), 0);
+	const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+	Output->SetStringField(TEXT("status"), InStatus);
+	const TSharedRef<FJsonObject> Ext = MakeShared<FJsonObject>();
+	const TSharedRef<FJsonObject> File = MakeShared<FJsonObject>();
+	File->SetStringField(TEXT("module"), InModule);
+	File->SetNumberField(TEXT("size"), 0);
+	File->SetStringField(TEXT("deviceSn"), InDeviceSn);
+	File->SetStringField(TEXT("key"), NewUuid());
+	File->SetStringField(TEXT("fingerprint"), NewUuid());
+	const TSharedRef<FJsonObject> Progress = MakeShared<FJsonObject>();
+	Progress->SetNumberField(TEXT("currentStep"), InProgressPercent > 0 ? 2 : 1);
+	Progress->SetNumberField(TEXT("totalStep"), 2);
+	Progress->SetNumberField(TEXT("progress"), InProgressPercent);
+	Progress->SetNumberField(TEXT("finishTime"), 0);
+	Progress->SetNumberField(TEXT("uploadRate"), 0);
+	Progress->SetStringField(TEXT("status"), InStatus);
+	Progress->SetNumberField(TEXT("result"), 0);
+	File->SetObjectField(TEXT("progress"), Progress);
+	Ext->SetArrayField(TEXT("files"), { MakeShared<FJsonValueObject>(File) });
+	Output->SetObjectField(TEXT("ext"), Ext);
+	Data->SetObjectField(TEXT("output"), Output);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildMediaPrioritizeEventData(const FString& InFlightId) const
+{
+	// 对齐 dock HighestPriorityUploadFlightTaskMedia：data={flightId}
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("flightId"), InFlightId);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildFileUploadListOutput() const
+{
+	// 对齐 dock FileUploadListResponse：{files:[FileUploadListFile]}，合成机场/无人机各一条可上传日志
+	const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+
+	const TSharedRef<FJsonObject> DockFile = MakeShared<FJsonObject>();
+	DockFile->SetStringField(TEXT("deviceSn"), DockSn);
+	DockFile->SetStringField(TEXT("module"), TEXT("3"));
+	DockFile->SetNumberField(TEXT("result"), 0);
+	const TSharedRef<FJsonObject> DockIndex = MakeShared<FJsonObject>();
+	DockIndex->SetNumberField(TEXT("bootIndex"), 1);
+	DockIndex->SetNumberField(TEXT("startTime"), 0);
+	DockIndex->SetNumberField(TEXT("endTime"), 0);
+	DockIndex->SetNumberField(TEXT("size"), 0);
+	DockFile->SetArrayField(TEXT("list"), { MakeShared<FJsonValueObject>(DockIndex) });
+
+	const TSharedRef<FJsonObject> DroneFile = MakeShared<FJsonObject>();
+	DroneFile->SetStringField(TEXT("deviceSn"), DroneSn);
+	DroneFile->SetStringField(TEXT("module"), TEXT("0"));
+	DroneFile->SetNumberField(TEXT("result"), 0);
+	const TSharedRef<FJsonObject> DroneIndex = MakeShared<FJsonObject>();
+	DroneIndex->SetNumberField(TEXT("bootIndex"), 1);
+	DroneIndex->SetNumberField(TEXT("startTime"), 0);
+	DroneIndex->SetNumberField(TEXT("endTime"), 0);
+	DroneIndex->SetNumberField(TEXT("size"), 0);
+	DroneFile->SetArrayField(TEXT("list"), { MakeShared<FJsonValueObject>(DroneIndex) });
+
+	Output->SetArrayField(TEXT("files"), { MakeShared<FJsonValueObject>(DockFile), MakeShared<FJsonValueObject>(DroneFile) });
+	return Output;
 }
 
 TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildDockOsdPayload() const

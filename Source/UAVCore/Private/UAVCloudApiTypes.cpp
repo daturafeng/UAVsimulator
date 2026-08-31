@@ -65,6 +65,12 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodHeartBeat = TEXT("heart_beat");
 	const TCHAR* kMethodDroneEmergencyStop = TEXT("drone_emergency_stop");
 	const TCHAR* kMethodOtaCreate = TEXT("ota_create");
+	const TCHAR* kMethodCloudControlAuthRequest = TEXT("cloud_control_auth_request");
+	const TCHAR* kMethodCloudControlRelease = TEXT("cloud_control_release");
+	const TCHAR* kMethodFileUploadStart = TEXT("fileupload_start");
+	const TCHAR* kMethodFileUploadUpdate = TEXT("fileupload_update");
+	const TCHAR* kMethodFileUploadList = TEXT("fileupload_list");
+	const TCHAR* kMethodMediaPrioritize = TEXT("upload_flighttask_media_prioritize");
 
 	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
 	const TCHAR* kMethodDebugModeOpen = TEXT("debug_mode_open");
@@ -103,6 +109,9 @@ namespace UAV::CloudApi
 	const TCHAR* kEventFlyToPointProgress = TEXT("fly_to_point_progress");
 	const TCHAR* kEventDrcStatusNotify = TEXT("drc_status_notify");
 	const TCHAR* kEventOtaProgress = TEXT("ota_progress");
+	const TCHAR* kEventFileUploadProgress = TEXT("fileupload_progress");
+	const TCHAR* kEventCloudControlAuthNotify = TEXT("cloud_control_auth_notify");
+	const TCHAR* kEventMediaPrioritize = TEXT("highest_priority_upload_flighttask_media");
 
 	FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality)
 	{

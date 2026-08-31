@@ -167,6 +167,36 @@ public:
 	/** 组装载荷固件版本 state data（对齐 dock PayloadFirmwareVersion：data={载荷索引:{firmware_version}}；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildPayloadFirmwareVersionData() const;
 
+	/** 云端控制权授权请求处理：校验 user_id / user_callsign / control_keys 非空且 control_keys 仅支持 flight/payload，返回 result（对齐 dock AbstractControlService.cloudControlAuthRequest；自动化测试入口） */
+	int32 HandleCloudControlAuthRequest(const FString& InMethod, const FString& InDataJson);
+
+	/** 云端控制权释放处理：校验 control_keys 非空，返回 result（对齐 dock CloudControlReleaseRequest；自动化测试入口） */
+	int32 HandleCloudControlRelease(const FString& InMethod, const FString& InDataJson);
+
+	/** 日志文件上传启动处理：校验 bucket / credentials / endpoint / fileStoreDir / provider / region / params.files 必填合法，返回 result（对齐 dock AbstractLogService.fileuploadStart；自动化测试入口） */
+	int32 HandleFileUploadStart(const FString& InMethod, const FString& InDataJson);
+
+	/** 日志上传状态更新处理：校验 moduleList（1-2 项）与 status="cancel"，返回 result（对齐 dock AbstractLogService.fileuploadUpdate；自动化测试入口） */
+	int32 HandleFileUploadUpdate(const FString& InMethod, const FString& InDataJson);
+
+	/** 可上传日志文件列表查询处理：校验 moduleList（1-2 项），返回 result（对齐 dock AbstractLogService.fileuploadList；自动化测试入口） */
+	int32 HandleFileUploadList(const FString& InMethod, const FString& InDataJson);
+
+	/** 媒体任务上传优先级处理：校验 flight_id 非空且符合格式约束，返回 result（对齐 dock AbstractMediaService.uploadFlighttaskMediaPrioritize；自动化测试入口） */
+	int32 HandleMediaPrioritize(const FString& InMethod, const FString& InDataJson);
+
+	/** 组装 cloud_control_auth_notify 事件 data（对齐 dock EventsDataRequest<CloudControlAuthNotify>：data={result:0, output:{status, result}}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildCloudControlAuthNotifyData(const FString& InStatus, int32 InResult) const;
+
+	/** 组装 fileupload_progress 事件 data（对齐 dock EventsDataRequest<FileUploadProgress>：data={result:0, output:{status, ext:{files:[{module,size,deviceSn,key,fingerprint,progress}]}}}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildFileUploadProgressEventData(const FString& InStatus, int32 InProgressPercent, const FString& InModule, const FString& InDeviceSn) const;
+
+	/** 组装 highest_priority_upload_flighttask_media 事件 data（对齐 dock HighestPriorityUploadFlightTaskMedia：data={flightId}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildMediaPrioritizeEventData(const FString& InFlightId) const;
+
+	/** 组装 fileupload_list 回执 output（对齐 dock FileUploadListResponse：{files:[{deviceSn,list,module,result}]}；自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildFileUploadListOutput() const;
+
 	/** 组装 property/set_reply 回执报文（对齐 dock TopicPropertySetResponse：{tid, bid, timestamp, data:{result}}，无 method；自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildPropertySetReply(const FString& InTid, const FString& InBid, int32 InResult) const;
 

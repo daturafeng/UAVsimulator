@@ -69,6 +69,12 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kMethodHeartBeat;				// heart_beat（DRC 心跳）
 	UAVCORE_API extern const TCHAR* kMethodDroneEmergencyStop;		// drone_emergency_stop（DRC 急停）
 	UAVCORE_API extern const TCHAR* kMethodOtaCreate;				// ota_create（固件升级指令，对齐 dock FirmwareMethodEnum）
+	UAVCORE_API extern const TCHAR* kMethodCloudControlAuthRequest;	// cloud_control_auth_request（RC 链路云端控制权授权请求，对齐 dock ControlMethodEnum）
+	UAVCORE_API extern const TCHAR* kMethodCloudControlRelease;		// cloud_control_release（RC 链路释放云端控制权，对齐 dock ControlMethodEnum）
+	UAVCORE_API extern const TCHAR* kMethodFileUploadStart;			// fileupload_start（日志文件上传启动，对齐 dock LogMethodEnum）
+	UAVCORE_API extern const TCHAR* kMethodFileUploadUpdate;		// fileupload_update（日志上传状态更新，对齐 dock LogMethodEnum）
+	UAVCORE_API extern const TCHAR* kMethodFileUploadList;			// fileupload_list（可上传日志文件列表查询，对齐 dock LogMethodEnum）
+	UAVCORE_API extern const TCHAR* kMethodMediaPrioritize;			// upload_flighttask_media_prioritize（媒体任务上传优先级，对齐 dock MediaMethodEnum）
 
 	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
 	UAVCORE_API extern const TCHAR* kMethodDebugModeOpen;				// debug_mode_open（开启调试模式）
@@ -107,6 +113,9 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kEventFlyToPointProgress;		// fly_to_point_progress
 	UAVCORE_API extern const TCHAR* kEventDrcStatusNotify;			// drc_status_notify（DRC 会话状态）
 	UAVCORE_API extern const TCHAR* kEventOtaProgress;				// ota_progress（固件升级进度事件，对齐 dock EventsMethodEnum）
+	UAVCORE_API extern const TCHAR* kEventFileUploadProgress;		// fileupload_progress（日志上传进度事件，对齐 dock EventsMethodEnum）
+	UAVCORE_API extern const TCHAR* kEventCloudControlAuthNotify;	// cloud_control_auth_notify（云端控制权授权结果事件，对齐 dock EventsMethodEnum）
+	UAVCORE_API extern const TCHAR* kEventMediaPrioritize;			// highest_priority_upload_flighttask_media（媒体上传优先级事件，对齐 dock EventsMethodEnum）
 
 	// ---- 视频清晰度档位（与上云 API video_quality 语义一致）----
 	/** 推流参数（分辨率/码率/帧率） */
