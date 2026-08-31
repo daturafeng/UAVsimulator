@@ -17,6 +17,7 @@
 #include "UAVPayloadMath.h"
 
 #include "Misc/DateTime.h"
+#include "HAL/PlatformTime.h"
 
 // 上云 API 报文工具位于 UAV::CloudApi 命名空间，统一引入
 using namespace UAV::CloudApi;
@@ -175,6 +176,109 @@ namespace
 		}
 		OutOutput = GetDeviceObjectField(InData, TEXT("output"));
 		return OutOutput.IsValid();
+	}
+
+	/** 协议文件名只允许 ASCII 字母或数字 */
+	bool IsAsciiAlphaNumeric(TCHAR InChar)
+	{
+		return (InChar >= TEXT('0') && InChar <= TEXT('9'))
+			|| (InChar >= TEXT('A') && InChar <= TEXT('Z'))
+			|| (InChar >= TEXT('a') && InChar <= TEXT('z'));
+	}
+
+	/** 校验 geofence_<32位字母数字>.json */
+	bool IsValidFlightAreaFileName(const FString& InName)
+	{
+		const FString Prefix = TEXT("geofence_");
+		const FString Suffix = TEXT(".json");
+		if (!InName.StartsWith(Prefix) || !InName.EndsWith(Suffix)
+			|| InName.Len() != Prefix.Len() + 32 + Suffix.Len())
+		{
+			return false;
+		}
+		const FString Version = InName.Mid(Prefix.Len(), 32);
+		for (const TCHAR Char : Version)
+		{
+			if (!IsAsciiAlphaNumeric(Char))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** 校验 offline_map_full_<字母数字或下划线>.rocksdb.zip */
+	bool IsValidOfflineMapFileName(const FString& InName)
+	{
+		const FString Prefix = TEXT("offline_map_full_");
+		const FString Suffix = TEXT(".rocksdb.zip");
+		if (!InName.StartsWith(Prefix) || !InName.EndsWith(Suffix)
+			|| InName.Len() <= Prefix.Len() + Suffix.Len())
+		{
+			return false;
+		}
+		const FString Version = InName.Mid(Prefix.Len(), InName.Len() - Prefix.Len() - Suffix.Len());
+		for (const TCHAR Char : Version)
+		{
+			if (!IsAsciiAlphaNumeric(Char) && Char != TEXT('_'))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** 读取非负整数 size，拒绝字符串、负数和小数 */
+	bool TryGetNonNegativeInteger(const TSharedPtr<FJsonObject>& InObject, const FString& InKey, int64& OutValue)
+	{
+		const TSharedPtr<FJsonValue> Value = InObject.IsValid() ? InObject->TryGetField(InKey) : nullptr;
+		if (!Value.IsValid() || Value->Type != EJson::Number)
+		{
+			return false;
+		}
+		const double Number = Value->AsNumber();
+		const double Rounded = FMath::RoundToDouble(Number);
+		if (!FMath::IsFinite(Number) || Number < 0.0 || !FMath::IsNearlyEqual(Number, Rounded, UE_DOUBLE_SMALL_NUMBER))
+		{
+			return false;
+		}
+		OutValue = static_cast<int64>(Rounded);
+		return true;
+	}
+
+	/** 解析并完整校验飞行区域或离线地图文件数组 */
+	bool TryParseResourceFiles(const TSharedPtr<FJsonObject>& InOutput, bool bOfflineMap, TArray<FUAVResourceFileState>& OutFiles)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Files = nullptr;
+		if (!InOutput.IsValid() || !InOutput->TryGetArrayField(TEXT("files"), Files))
+		{
+			return false;
+		}
+
+		TArray<FUAVResourceFileState> ParsedFiles;
+		ParsedFiles.Reserve(Files->Num());
+		for (const TSharedPtr<FJsonValue>& Value : *Files)
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				return false;
+			}
+			const TSharedPtr<FJsonObject> Item = Value->AsObject();
+			FUAVResourceFileState File;
+			File.Name = GetDeviceStringField(Item, TEXT("name"));
+			File.Url = GetDeviceStringField(Item, TEXT("url"));
+			File.Checksum = GetDeviceStringField(Item, TEXT("checksum"));
+			if ((bOfflineMap ? !IsValidOfflineMapFileName(File.Name) : !IsValidFlightAreaFileName(File.Name))
+				|| File.Url.IsEmpty() || File.Checksum.IsEmpty()
+				|| !TryGetNonNegativeInteger(Item, TEXT("size"), File.Size))
+			{
+				return false;
+			}
+			ParsedFiles.Add(MoveTemp(File));
+		}
+
+		OutFiles = MoveTemp(ParsedFiles);
+		return true;
 	}
 
 	/** 校验固件版本字符串格式：xx.xx.xxxx（对齐 dock OtaCreateDevice product_version 的 @Pattern） */
@@ -403,6 +507,7 @@ void UUAVMqttBridgeComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void UUAVMqttBridgeComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	ExpireTimedOutRequests(FPlatformTime::Seconds());
 
 	if (!bConnected)
 	{
@@ -661,9 +766,25 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildStorageConfigGetRequestDat
 	return Data;
 }
 
-TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildTrackedRequestMessage(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InTid, const FString& InBid)
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildFlighttaskResourceGetRequestData(const FString& InFlightId) const
 {
-	if (InMethod.IsEmpty())
+	if (InFlightId.IsEmpty())
+	{
+		return nullptr;
+	}
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("flight_id"), InFlightId);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildEmptyResourceRequestData() const
+{
+	return MakeShared<FJsonObject>();
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildTrackedRequestMessage(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InTid, const FString& InBid, const FString& InContext, bool bInEmitSyncProgress, double InCreatedAtSeconds)
+{
+	if (InMethod.IsEmpty() || !InData.IsValid())
 	{
 		return nullptr;
 	}
@@ -671,18 +792,24 @@ TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildTrackedRequestMessage(cons
 	const FString Tid = InTid.IsEmpty() ? NewUuid() : InTid;
 	const FString Bid = InBid.IsEmpty() ? NewUuid() : InBid;
 	const TSharedRef<FJsonObject> Request = MakeRequestMessage(InMethod, DockSn, InData, Tid, Bid);
-	PendingRequests.Add(Bid, { Tid, InMethod });
+	FUAVPendingCloudRequest Pending;
+	Pending.Tid = Tid;
+	Pending.Method = InMethod;
+	Pending.Context = InContext;
+	Pending.CreatedAtSeconds = InCreatedAtSeconds >= 0.0 ? InCreatedAtSeconds : FPlatformTime::Seconds();
+	Pending.bEmitSyncProgress = bInEmitSyncProgress;
+	PendingRequests.Add(Bid, MoveTemp(Pending));
 	return Request;
 }
 
-FString UUAVMqttBridgeComponent::PublishRequest(const FString& InMethod, const TSharedPtr<FJsonObject>& InData)
+FString UUAVMqttBridgeComponent::PublishRequest(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InContext, bool bInEmitSyncProgress)
 {
-	if (!MqttClient || !bConnected || InMethod.IsEmpty())
+	if (!MqttClient || !bConnected || InMethod.IsEmpty() || !InData.IsValid())
 	{
 		return FString();
 	}
 
-	const TSharedPtr<FJsonObject> Request = BuildTrackedRequestMessage(InMethod, InData);
+	const TSharedPtr<FJsonObject> Request = BuildTrackedRequestMessage(InMethod, InData, FString(), FString(), InContext, bInEmitSyncProgress);
 	if (!Request.IsValid())
 	{
 		return FString();
@@ -715,6 +842,22 @@ FString UUAVMqttBridgeComponent::PublishStorageConfigRequest()
 	return PublishRequest(kRequestStorageConfigGet, BuildStorageConfigGetRequestData());
 }
 
+FString UUAVMqttBridgeComponent::PublishFlighttaskResourceRequest(const FString& InFlightId)
+{
+	const TSharedPtr<FJsonObject> Data = BuildFlighttaskResourceGetRequestData(InFlightId);
+	return Data.IsValid() ? PublishRequest(kRequestFlighttaskResourceGet, Data, InFlightId) : FString();
+}
+
+FString UUAVMqttBridgeComponent::PublishFlightAreasRequest()
+{
+	return PublishRequest(kRequestFlightAreasGet, BuildEmptyResourceRequestData());
+}
+
+FString UUAVMqttBridgeComponent::PublishOfflineMapRequest()
+{
+	return PublishRequest(kRequestOfflineMapGet, BuildEmptyResourceRequestData());
+}
+
 bool UUAVMqttBridgeComponent::DispatchRequestsReplyMessage(const FString& InPayloadJson)
 {
 	TSharedPtr<FJsonObject> Root;
@@ -736,6 +879,7 @@ bool UUAVMqttBridgeComponent::DispatchRequestsReplyMessage(const FString& InPayl
 		return false;
 	}
 
+	const FUAVPendingCloudRequest PendingCopy = *Pending;
 	const TSharedPtr<FJsonObject> Data = GetDeviceObjectField(Root, TEXT("data"));
 	PendingRequests.Remove(Bid);
 
@@ -762,6 +906,22 @@ bool UUAVMqttBridgeComponent::DispatchRequestsReplyMessage(const FString& InPayl
 		{
 			bSuccess = HandleStorageConfigGetReply(Data);
 		}
+		else if (Method == kRequestFlighttaskResourceGet)
+		{
+			bSuccess = HandleFlighttaskResourceGetReply(Data, PendingCopy.Context);
+		}
+		else if (Method == kRequestFlightAreasGet)
+		{
+			bSuccess = HandleFlightAreasGetReply(Data);
+		}
+		else if (Method == kRequestOfflineMapGet)
+		{
+			bSuccess = HandleOfflineMapGetReply(Data);
+		}
+	}
+	if (PendingCopy.bEmitSyncProgress)
+	{
+		PublishResourceSyncProgress(Method, bSuccess);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] requests_reply %s -> %s"), *Method, bSuccess ? TEXT("成功") : TEXT("失败"));
@@ -955,6 +1115,124 @@ bool UUAVMqttBridgeComponent::HandleStorageConfigGetReply(const TSharedPtr<FJson
 	NewState.bValid = true;
 	StorageConfigState = MoveTemp(NewState);
 	return true;
+}
+
+bool UUAVMqttBridgeComponent::HandleFlighttaskResourceGetReply(const TSharedPtr<FJsonObject>& InData, const FString& InFlightId)
+{
+	TSharedPtr<FJsonObject> Output;
+	if (InFlightId.IsEmpty() || !TryGetSuccessfulReplyOutput(InData, Output))
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> File = GetDeviceObjectField(Output, TEXT("file"));
+	FUAVFlighttaskResourceState NewState;
+	NewState.FlightId = InFlightId;
+	NewState.Url = GetDeviceStringField(File, TEXT("url"));
+	NewState.Fingerprint = GetDeviceStringField(File, TEXT("fingerprint"));
+	if (NewState.Url.IsEmpty() || NewState.Fingerprint.IsEmpty())
+	{
+		return false;
+	}
+
+	NewState.bValid = true;
+	FlighttaskResourceState = MoveTemp(NewState);
+	return true;
+}
+
+bool UUAVMqttBridgeComponent::HandleFlightAreasGetReply(const TSharedPtr<FJsonObject>& InData)
+{
+	TSharedPtr<FJsonObject> Output;
+	FUAVFlightAreasState NewState;
+	if (!TryGetSuccessfulReplyOutput(InData, Output)
+		|| !TryParseResourceFiles(Output, false, NewState.Files))
+	{
+		return false;
+	}
+
+	NewState.bValid = true;
+	FlightAreasState = MoveTemp(NewState);
+	return true;
+}
+
+bool UUAVMqttBridgeComponent::HandleOfflineMapGetReply(const TSharedPtr<FJsonObject>& InData)
+{
+	TSharedPtr<FJsonObject> Output;
+	FUAVOfflineMapState NewState;
+	if (!TryGetSuccessfulReplyOutput(InData, Output)
+		|| !Output->TryGetBoolField(TEXT("offline_map_enable"), NewState.bOfflineMapEnabled)
+		|| !TryParseResourceFiles(Output, true, NewState.Files))
+	{
+		return false;
+	}
+
+	NewState.bValid = true;
+	OfflineMapState = MoveTemp(NewState);
+	return true;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildResourceSyncProgressEventData(const FString& InStatus, int32 InReason, const TArray<FUAVResourceFileState>& InFiles) const
+{
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("status"), InStatus);
+	Data->SetNumberField(TEXT("reason"), InReason);
+	if (InFiles.Num() > 0)
+	{
+		const TSharedRef<FJsonObject> File = MakeShared<FJsonObject>();
+		File->SetStringField(TEXT("name"), InFiles[0].Name);
+		File->SetStringField(TEXT("checksum"), InFiles[0].Checksum);
+		Data->SetObjectField(TEXT("file"), File);
+	}
+	return Data;
+}
+
+void UUAVMqttBridgeComponent::PublishResourceSyncProgress(const FString& InRequestMethod, bool bInSuccess)
+{
+	const FString Status = bInSuccess ? TEXT("synchronized") : TEXT("fail");
+	const int32 Reason = bInSuccess ? 0 : 1;
+	if (InRequestMethod == kRequestFlightAreasGet)
+	{
+		PublishEvent(kEventFlightAreasSyncProgress,
+			BuildResourceSyncProgressEventData(Status, Reason, bInSuccess ? FlightAreasState.Files : TArray<FUAVResourceFileState>()));
+	}
+	else if (InRequestMethod == kRequestOfflineMapGet)
+	{
+		PublishEvent(kEventOfflineMapSyncProgress,
+			BuildResourceSyncProgressEventData(Status, Reason, bInSuccess ? OfflineMapState.Files : TArray<FUAVResourceFileState>()));
+	}
+}
+
+int32 UUAVMqttBridgeComponent::ExpireTimedOutRequests(double InNowSeconds)
+{
+	if (RequestTimeoutSeconds <= 0.0f || PendingRequests.Num() == 0)
+	{
+		return 0;
+	}
+
+	TArray<FString> ExpiredBids;
+	for (const TPair<FString, FUAVPendingCloudRequest>& Pair : PendingRequests)
+	{
+		if (InNowSeconds - Pair.Value.CreatedAtSeconds >= static_cast<double>(RequestTimeoutSeconds))
+		{
+			ExpiredBids.Add(Pair.Key);
+		}
+	}
+
+	for (const FString& Bid : ExpiredBids)
+	{
+		FUAVPendingCloudRequest Pending;
+		if (!PendingRequests.RemoveAndCopyValue(Bid, Pending))
+		{
+			continue;
+		}
+		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] 主动请求超时 method=%s bid=%s"), *Pending.Method, *Bid);
+		if (Pending.bEmitSyncProgress)
+		{
+			PublishResourceSyncProgress(Pending.Method, false);
+		}
+		OnCloudRequestCompleted.Broadcast(Pending.Method, false, Bid);
+	}
+	return ExpiredBids.Num();
 }
 
 void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJson, const FString& InSn)
@@ -1164,9 +1442,35 @@ void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJs
 		OnServiceCommandReceived.Broadcast(Method);
 		return;
 	}
+	else if (Method == kMethodFlightAreasUpdate || Method == kMethodOfflineMapUpdate)
+	{
+		// 地图资源更新指令无业务参数：先回 sent，再由 requests 通道异步拉取资源并上报同步结果。
+		Result = UAV::FlightControlResult::Success;
+		const TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+		Output->SetStringField(TEXT("status"), TEXT("sent"));
+		PublishServicesReply(Method, Tid, Bid, Result, InSn, Output);
+		if (Method == kMethodFlightAreasUpdate)
+		{
+			PublishRequest(kRequestFlightAreasGet, BuildEmptyResourceRequestData(), FString(), true);
+		}
+		else
+		{
+			PublishRequest(kRequestOfflineMapGet, BuildEmptyResourceRequestData(), FString(), true);
+		}
+		OnServiceCommandReceived.Broadcast(Method);
+		return;
+	}
 	else if (bIsFlightCommand && FlightControl)
 	{
 		Result = FlightControl->HandleCommand(Method, DataJson);
+		if (Method == kMethodFlighttaskPrepare && Result == UAV::FlightControlResult::Success)
+		{
+			TSharedPtr<FJsonObject> PrepareData;
+			if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(DataJson), PrepareData) && PrepareData.IsValid())
+			{
+				PublishFlighttaskResourceRequest(GetDeviceStringField(PrepareData, TEXT("flight_id")));
+			}
+		}
 	}
 	else if (bIsLiveCommand && CameraStream)
 	{

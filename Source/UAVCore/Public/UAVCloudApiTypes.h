@@ -32,6 +32,8 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kMethodFlighttaskUndo;			// flighttask_undo
 	UAVCORE_API extern const TCHAR* kMethodFlighttaskPause;			// flighttask_pause
 	UAVCORE_API extern const TCHAR* kMethodFlighttaskRecovery;		// flighttask_recovery
+	UAVCORE_API extern const TCHAR* kMethodFlightAreasUpdate;		// flight_areas_update（飞行区域资源更新）
+	UAVCORE_API extern const TCHAR* kMethodOfflineMapUpdate;		// offline_map_update（离线地图资源更新）
 	UAVCORE_API extern const TCHAR* kMethodReturnHome;				// return_home
 	UAVCORE_API extern const TCHAR* kMethodReturnHomeCancel;		// return_home_cancel
 	UAVCORE_API extern const TCHAR* kMethodFlyToPoint;				// fly_to_point
@@ -84,6 +86,9 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kRequestAirportOrganizationGet;	// airport_organization_get（绑定码查询组织）
 	UAVCORE_API extern const TCHAR* kRequestAirportOrganizationBind;	// airport_organization_bind（机场/无人机绑定组织）
 	UAVCORE_API extern const TCHAR* kRequestStorageConfigGet;		// storage_config_get（媒体对象存储配置）
+	UAVCORE_API extern const TCHAR* kRequestFlighttaskResourceGet;	// flighttask_resource_get（航线任务资源）
+	UAVCORE_API extern const TCHAR* kRequestFlightAreasGet;			// flight_areas_get（飞行区域资源）
+	UAVCORE_API extern const TCHAR* kRequestOfflineMapGet;			// offline_map_get（离线地图资源）
 
 	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
 	UAVCORE_API extern const TCHAR* kMethodDebugModeOpen;				// debug_mode_open（开启调试模式）
@@ -125,6 +130,8 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kEventFileUploadProgress;		// fileupload_progress（日志上传进度事件，对齐 dock EventsMethodEnum）
 	UAVCORE_API extern const TCHAR* kEventCloudControlAuthNotify;	// cloud_control_auth_notify（云端控制权授权结果事件，对齐 dock EventsMethodEnum）
 	UAVCORE_API extern const TCHAR* kEventMediaPrioritize;			// highest_priority_upload_flighttask_media（媒体上传优先级事件，对齐 dock EventsMethodEnum）
+	UAVCORE_API extern const TCHAR* kEventFlightAreasSyncProgress;	// flight_areas_sync_progress（飞行区域同步进度）
+	UAVCORE_API extern const TCHAR* kEventOfflineMapSyncProgress;	// offline_map_sync_progress（离线地图同步进度）
 
 	// ---- 视频清晰度档位（与上云 API video_quality 语义一致）----
 	/** 推流参数（分辨率/码率/帧率） */

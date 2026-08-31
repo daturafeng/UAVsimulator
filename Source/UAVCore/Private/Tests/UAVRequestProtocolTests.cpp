@@ -17,6 +17,13 @@ bool FUAVRequestProtocolTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("organization get method"), TEXT("airport_organization_get"), FString(kRequestAirportOrganizationGet));
 	TestEqual(TEXT("organization bind method"), TEXT("airport_organization_bind"), FString(kRequestAirportOrganizationBind));
 	TestEqual(TEXT("storage config method"), TEXT("storage_config_get"), FString(kRequestStorageConfigGet));
+	TestEqual(TEXT("flight areas update service method"), TEXT("flight_areas_update"), FString(kMethodFlightAreasUpdate));
+	TestEqual(TEXT("offline map update service method"), TEXT("offline_map_update"), FString(kMethodOfflineMapUpdate));
+	TestEqual(TEXT("flighttask resource get request method"), TEXT("flighttask_resource_get"), FString(kRequestFlighttaskResourceGet));
+	TestEqual(TEXT("flight areas get request method"), TEXT("flight_areas_get"), FString(kRequestFlightAreasGet));
+	TestEqual(TEXT("offline map get request method"), TEXT("offline_map_get"), FString(kRequestOfflineMapGet));
+	TestEqual(TEXT("flight areas sync progress event method"), TEXT("flight_areas_sync_progress"), FString(kEventFlightAreasSyncProgress));
+	TestEqual(TEXT("offline map sync progress event method"), TEXT("offline_map_sync_progress"), FString(kEventOfflineMapSyncProgress));
 
 	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
 	Data->SetStringField(TEXT("config_type"), TEXT("json"));
@@ -35,6 +42,22 @@ bool FUAVRequestProtocolTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("config_type 透传"), TEXT("json"), RequestData->GetStringField(TEXT("config_type")));
 		TestEqual(TEXT("config_scope 透传"), TEXT("product"), RequestData->GetStringField(TEXT("config_scope")));
+	}
+
+	const TSharedRef<FJsonObject> ResourceData = MakeShared<FJsonObject>();
+	ResourceData->SetStringField(TEXT("flight_id"), TEXT("FLT-001"));
+	const TSharedRef<FJsonObject> ResourceRequest = MakeRequestMessage(
+		kRequestFlighttaskResourceGet, TEXT("DOCK3TEST001"), ResourceData, TEXT("tid-resource"), TEXT("bid-resource"));
+
+	TestEqual(TEXT("resource request.tid"), TEXT("tid-resource"), ResourceRequest->GetStringField(TEXT("tid")));
+	TestEqual(TEXT("resource request.bid"), TEXT("bid-resource"), ResourceRequest->GetStringField(TEXT("bid")));
+	TestEqual(TEXT("resource request.gateway"), TEXT("DOCK3TEST001"), ResourceRequest->GetStringField(TEXT("gateway")));
+	TestEqual(TEXT("resource request.method"), TEXT("flighttask_resource_get"), ResourceRequest->GetStringField(TEXT("method")));
+	const TSharedPtr<FJsonObject> ResourceRequestData = ResourceRequest->GetObjectField(TEXT("data"));
+	TestTrue(TEXT("resource request.data 存在"), ResourceRequestData.IsValid());
+	if (ResourceRequestData.IsValid())
+	{
+		TestEqual(TEXT("flight_id 透传"), TEXT("FLT-001"), ResourceRequestData->GetStringField(TEXT("flight_id")));
 	}
 
 	const TSharedRef<FJsonObject> AutoIds = MakeRequestMessage(kRequestConfig, TEXT("DOCK3TEST001"), nullptr);

@@ -96,11 +96,81 @@ struct FUAVStorageConfigState
 	FString Region;
 };
 
+/** dock 返回的航线任务资源（flighttask_resource_get requests_reply） */
+USTRUCT(BlueprintType)
+struct FUAVFlighttaskResourceState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	bool bValid = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString FlightId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Url;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Fingerprint;
+};
+
+/** 云端资源文件元数据（飞行区域/离线地图共用） */
+USTRUCT(BlueprintType)
+struct FUAVResourceFileState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Name;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Url;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Checksum;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	int64 Size = 0;
+};
+
+/** 最近成功的飞行区域资源列表 */
+USTRUCT(BlueprintType)
+struct FUAVFlightAreasState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	bool bValid = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	TArray<FUAVResourceFileState> Files;
+};
+
+/** 最近成功的离线地图配置与资源列表 */
+USTRUCT(BlueprintType)
+struct FUAVOfflineMapState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	bool bValid = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	bool bOfflineMapEnabled = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	TArray<FUAVResourceFileState> Files;
+};
+
 /** requests / requests_reply 异步关联记录 */
 struct FUAVPendingCloudRequest
 {
 	FString Tid;
 	FString Method;
+	FString Context;
+	double CreatedAtSeconds = 0.0;
+	bool bEmitSyncProgress = false;
 };
 
 /** 无人机可设置属性状态（物模型 property/set 驱动，OSD 联动输出；默认值对齐原 OSD 硬编码） */
@@ -341,6 +411,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
 	FString DroneCallsign = TEXT("UAVsimulator M4TD");
 
+	/** 主动请求超时时间（秒，超时后移除 pending 并广播失败） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config", meta = (ClampMin = "0.1"))
+	float RequestTimeoutSeconds = 10.0f;
+
 	// ---- API ----
 	/** 建立 MQTT 连接（异步，结果通过 OnConnectionChanged 广播） */
 	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge")
@@ -362,6 +436,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge|Requests")
 	FString PublishStorageConfigRequest();
 
+	/** 显式请求指定航线任务资源；flight_id 为空或未连接时返回空串 */
+	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge|Requests")
+	FString PublishFlighttaskResourceRequest(const FString& InFlightId);
+
+	/** 显式请求飞行区域资源；未连接时返回空串 */
+	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge|Requests")
+	FString PublishFlightAreasRequest();
+
+	/** 显式请求离线地图资源；未连接时返回空串 */
+	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge|Requests")
+	FString PublishOfflineMapRequest();
+
 	/** 最近成功的产品配置 */
 	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
 	FUAVProductConfigState GetProductConfigState() const { return ProductConfigState; }
@@ -378,6 +464,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
 	FUAVStorageConfigState GetStorageConfigState() const { return StorageConfigState; }
 
+	/** 最近成功的航线任务资源 */
+	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
+	FUAVFlighttaskResourceState GetFlighttaskResourceState() const { return FlighttaskResourceState; }
+
+	/** 最近成功的飞行区域资源列表 */
+	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
+	FUAVFlightAreasState GetFlightAreasState() const { return FlightAreasState; }
+
+	/** 最近成功的离线地图资源列表 */
+	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
+	FUAVOfflineMapState GetOfflineMapState() const { return OfflineMapState; }
+
 	/** 最近一次组织名称查询结果 */
 	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
 	FString GetOrganizationName() const { return LastOrganizationName; }
@@ -389,7 +487,7 @@ public:
 	bool HasPendingRequest(const FString& InBid) const { return PendingRequests.Contains(InBid); }
 
 	/** 组装并登记主动请求（自动化测试入口；PublishRequest 复用） */
-	TSharedPtr<FJsonObject> BuildTrackedRequestMessage(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InTid = FString(), const FString& InBid = FString());
+	TSharedPtr<FJsonObject> BuildTrackedRequestMessage(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InTid = FString(), const FString& InBid = FString(), const FString& InContext = FString(), bool bInEmitSyncProgress = false, double InCreatedAtSeconds = -1.0);
 
 	/** 组装 config 请求 data（自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildConfigRequestData() const;
@@ -405,6 +503,18 @@ public:
 
 	/** 组装 storage_config_get 请求 data（自动化测试入口） */
 	TSharedPtr<FJsonObject> BuildStorageConfigGetRequestData() const;
+
+	/** 组装 flighttask_resource_get 请求 data；flight_id 为空时返回空（自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildFlighttaskResourceGetRequestData(const FString& InFlightId) const;
+
+	/** 组装 flight_areas_get / offline_map_get 的空 data（自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildEmptyResourceRequestData() const;
+
+	/** 组装飞行区域/离线地图同步进度 data（自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildResourceSyncProgressEventData(const FString& InStatus, int32 InReason, const TArray<FUAVResourceFileState>& InFiles) const;
+
+	/** 按单调时间清理超时 pending，返回清理数量（自动化测试入口） */
+	int32 ExpireTimedOutRequests(double InNowSeconds);
 
 	/** 解析并分发 requests_reply；仅 tid / bid / method 完全匹配时消费 pending（自动化测试入口） */
 	bool DispatchRequestsReplyMessage(const FString& InPayloadJson);
@@ -497,7 +607,7 @@ protected:
 	void PublishHms(const TSharedPtr<FJsonObject>& InHmsData);
 
 	/** 发布设备主动 request，返回 bid（未连接或参数非法时返回空串） */
-	FString PublishRequest(const FString& InMethod, const TSharedPtr<FJsonObject>& InData);
+	FString PublishRequest(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InContext = FString(), bool bInEmitSyncProgress = false);
 
 	/** 发布连接后的 config / airport_bind_status 启动请求 */
 	void PublishStartupRequests();
@@ -508,6 +618,12 @@ protected:
 	bool HandleAirportOrganizationGetReply(const TSharedPtr<FJsonObject>& InData);
 	bool HandleAirportOrganizationBindReply(const TSharedPtr<FJsonObject>& InData);
 	bool HandleStorageConfigGetReply(const TSharedPtr<FJsonObject>& InData);
+	bool HandleFlighttaskResourceGetReply(const TSharedPtr<FJsonObject>& InData, const FString& InFlightId);
+	bool HandleFlightAreasGetReply(const TSharedPtr<FJsonObject>& InData);
+	bool HandleOfflineMapGetReply(const TSharedPtr<FJsonObject>& InData);
+
+	/** 根据 resource request method 发布 synchronized / fail 同步事件 */
+	void PublishResourceSyncProgress(const FString& InRequestMethod, bool bInSuccess);
 
 	// ---- 事件回调（BeginPlay 时绑定飞控/相机委托） ----
 	UFUNCTION()
@@ -602,6 +718,18 @@ private:
 	/** 最近成功的对象存储配置 */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
 	FUAVStorageConfigState StorageConfigState;
+
+	/** 最近成功的航线任务资源 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
+	FUAVFlighttaskResourceState FlighttaskResourceState;
+
+	/** 最近成功的飞行区域资源 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
+	FUAVFlightAreasState FlightAreasState;
+
+	/** 最近成功的离线地图资源 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
+	FUAVOfflineMapState OfflineMapState;
 
 	/** 最近成功查询到的组织名称 */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))

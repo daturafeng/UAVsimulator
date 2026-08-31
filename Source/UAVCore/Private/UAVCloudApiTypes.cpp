@@ -28,6 +28,8 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodFlighttaskUndo = TEXT("flighttask_undo");
 	const TCHAR* kMethodFlighttaskPause = TEXT("flighttask_pause");
 	const TCHAR* kMethodFlighttaskRecovery = TEXT("flighttask_recovery");
+	const TCHAR* kMethodFlightAreasUpdate = TEXT("flight_areas_update");
+	const TCHAR* kMethodOfflineMapUpdate = TEXT("offline_map_update");
 	const TCHAR* kMethodReturnHome = TEXT("return_home");
 	const TCHAR* kMethodReturnHomeCancel = TEXT("return_home_cancel");
 	const TCHAR* kMethodFlyToPoint = TEXT("fly_to_point");
@@ -80,6 +82,9 @@ namespace UAV::CloudApi
 	const TCHAR* kRequestAirportOrganizationGet = TEXT("airport_organization_get");
 	const TCHAR* kRequestAirportOrganizationBind = TEXT("airport_organization_bind");
 	const TCHAR* kRequestStorageConfigGet = TEXT("storage_config_get");
+	const TCHAR* kRequestFlighttaskResourceGet = TEXT("flighttask_resource_get");
+	const TCHAR* kRequestFlightAreasGet = TEXT("flight_areas_get");
+	const TCHAR* kRequestOfflineMapGet = TEXT("offline_map_get");
 
 	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
 	const TCHAR* kMethodDebugModeOpen = TEXT("debug_mode_open");
@@ -121,6 +126,8 @@ namespace UAV::CloudApi
 	const TCHAR* kEventFileUploadProgress = TEXT("fileupload_progress");
 	const TCHAR* kEventCloudControlAuthNotify = TEXT("cloud_control_auth_notify");
 	const TCHAR* kEventMediaPrioritize = TEXT("highest_priority_upload_flighttask_media");
+	const TCHAR* kEventFlightAreasSyncProgress = TEXT("flight_areas_sync_progress");
+	const TCHAR* kEventOfflineMapSyncProgress = TEXT("offline_map_sync_progress");
 
 	FUAVVideoQualityParams GetVideoQualityParams(int32 InQuality)
 	{
