@@ -20,6 +20,8 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kTopicDrcUpTemplate;			// thing/product/{sn}/drc/up（设备 → 云端 DRC 回执）
 	UAVCORE_API extern const TCHAR* kTopicPropertySetTemplate;		// thing/product/{sn}/property/set（云端 → 设备物模型属性设置）
 	UAVCORE_API extern const TCHAR* kTopicPropertySetReplyTemplate;	// thing/product/{sn}/property/set_reply（设备 → 云端属性设置回执）
+	UAVCORE_API extern const TCHAR* kTopicRequestsTemplate;			// thing/product/{sn}/requests（设备 → 云端主动请求）
+	UAVCORE_API extern const TCHAR* kTopicRequestsReplyTemplate;	// thing/product/{sn}/requests_reply（云端 → 设备主动请求响应）
 
 	// ---- 服务指令 method ----
 	UAVCORE_API extern const TCHAR* kMethodFlightAuthorityGrab;		// flight_authority_grab
@@ -75,6 +77,13 @@ namespace UAV::CloudApi
 	UAVCORE_API extern const TCHAR* kMethodFileUploadUpdate;		// fileupload_update（日志上传状态更新，对齐 dock LogMethodEnum）
 	UAVCORE_API extern const TCHAR* kMethodFileUploadList;			// fileupload_list（可上传日志文件列表查询，对齐 dock LogMethodEnum）
 	UAVCORE_API extern const TCHAR* kMethodMediaPrioritize;			// upload_flighttask_media_prioritize（媒体任务上传优先级，对齐 dock MediaMethodEnum）
+
+	// ---- 设备主动请求 method（对齐 dock RequestsMethodEnum）----
+	UAVCORE_API extern const TCHAR* kRequestConfig;					// config（产品配置）
+	UAVCORE_API extern const TCHAR* kRequestAirportBindStatus;		// airport_bind_status（机场/无人机组织绑定状态）
+	UAVCORE_API extern const TCHAR* kRequestAirportOrganizationGet;	// airport_organization_get（绑定码查询组织）
+	UAVCORE_API extern const TCHAR* kRequestAirportOrganizationBind;	// airport_organization_bind（机场/无人机绑定组织）
+	UAVCORE_API extern const TCHAR* kRequestStorageConfigGet;		// storage_config_get（媒体对象存储配置）
 
 	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
 	UAVCORE_API extern const TCHAR* kMethodDebugModeOpen;				// debug_mode_open（开启调试模式）
@@ -167,6 +176,12 @@ namespace UAV::CloudApi
 	 * 用于 takeoff_to_point_progress / flighttask_progress / live_status 等上行事件。
 	 */
 	UAVCORE_API TSharedRef<FJsonObject> MakeEventMessage(const FString& InMethod, const FString& InGateway, const FString& InTid, const FString& InBid, const TSharedPtr<FJsonObject>& InData);
+
+	/**
+	 * 构造设备主动请求报文：{tid, bid, timestamp, gateway, method, data}。
+	 * tid / bid 为空时分别自动生成，用于 requests / requests_reply 异步关联。
+	 */
+	UAVCORE_API TSharedRef<FJsonObject> MakeRequestMessage(const FString& InMethod, const FString& InGateway, const TSharedPtr<FJsonObject>& InData, const FString& InTid = FString(), const FString& InBid = FString());
 
 	/**
 	 * 构造遥测/状态报文头：{tid, bid, timestamp}（无 method，用于 OSD/state/status）。

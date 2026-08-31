@@ -21,6 +21,88 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVMqttConnectionChangedDelegate, b
 /** 收到 services 指令事件（调试/转发用；参数：method） */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUAVServiceCommandReceivedDelegate, const FString&, Method);
 
+/** 设备主动请求完成事件（参数：method、是否成功、bid） */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FUAVCloudRequestCompletedDelegate, const FString&, Method, bool, bSuccess, const FString&, Bid);
+
+/** dock 返回的产品配置（config requests_reply） */
+USTRUCT(BlueprintType)
+struct FUAVProductConfigState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	bool bValid = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString NtpServerHost;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString AppId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString AppKey;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString AppLicense;
+};
+
+/** 单台设备的组织绑定状态（airport_bind_status requests_reply） */
+USTRUCT(BlueprintType)
+struct FUAVDeviceOrganizationState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	bool bHasResponse = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	bool bBound = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString OrganizationId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString OrganizationName;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString DeviceCallsign;
+};
+
+/** dock 返回的媒体对象存储配置（storage_config_get requests_reply，仅保存在运行时） */
+USTRUCT(BlueprintType)
+struct FUAVStorageConfigState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	bool bValid = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Bucket;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString CredentialsJson;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Endpoint;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString ObjectKeyPrefix;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Provider;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests")
+	FString Region;
+};
+
+/** requests / requests_reply 异步关联记录 */
+struct FUAVPendingCloudRequest
+{
+	FString Tid;
+	FString Method;
+};
+
 /** 无人机可设置属性状态（物模型 property/set 驱动，OSD 联动输出；默认值对齐原 OSD 硬编码） */
 USTRUCT(BlueprintType)
 struct FUAVDroneProperties
@@ -243,6 +325,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
 	bool bAutoConnectOnBeginPlay = true;
 
+	/** 组织绑定码（为空时仅查询绑定状态，不自动执行 organization_get / organization_bind） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
+	FString DeviceBindingCode;
+
+	/** 组织 ID（允许为空，dock 可按绑定码解析组织） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
+	FString OrganizationId;
+
+	/** 机场绑定呼号 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
+	FString DockCallsign = TEXT("UAVsimulator Dock3");
+
+	/** 无人机绑定呼号 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|MqttBridge|Config")
+	FString DroneCallsign = TEXT("UAVsimulator M4TD");
+
 	// ---- API ----
 	/** 建立 MQTT 连接（异步，结果通过 OnConnectionChanged 广播） */
 	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge")
@@ -260,6 +358,57 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge")
 	void PublishRaw(const FString& InTopic, const FString& InPayloadJson);
 
+	/** 显式请求媒体对象存储配置；返回请求 bid，未连接时返回空串 */
+	UFUNCTION(BlueprintCallable, Category = "UAV|MqttBridge|Requests")
+	FString PublishStorageConfigRequest();
+
+	/** 最近成功的产品配置 */
+	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
+	FUAVProductConfigState GetProductConfigState() const { return ProductConfigState; }
+
+	/** 机场组织绑定状态 */
+	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
+	FUAVDeviceOrganizationState GetDockOrganizationState() const { return DockOrganizationState; }
+
+	/** 无人机组织绑定状态 */
+	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
+	FUAVDeviceOrganizationState GetDroneOrganizationState() const { return DroneOrganizationState; }
+
+	/** 最近成功的媒体对象存储配置 */
+	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
+	FUAVStorageConfigState GetStorageConfigState() const { return StorageConfigState; }
+
+	/** 最近一次组织名称查询结果 */
+	UFUNCTION(BlueprintPure, Category = "UAV|MqttBridge|Requests")
+	FString GetOrganizationName() const { return LastOrganizationName; }
+
+	/** 当前待处理主动请求数量（自动化测试/诊断入口） */
+	int32 GetPendingRequestCount() const { return PendingRequests.Num(); }
+
+	/** 指定 bid 是否仍在等待响应（自动化测试/诊断入口） */
+	bool HasPendingRequest(const FString& InBid) const { return PendingRequests.Contains(InBid); }
+
+	/** 组装并登记主动请求（自动化测试入口；PublishRequest 复用） */
+	TSharedPtr<FJsonObject> BuildTrackedRequestMessage(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InTid = FString(), const FString& InBid = FString());
+
+	/** 组装 config 请求 data（自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildConfigRequestData() const;
+
+	/** 组装 airport_bind_status 请求 data（自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildAirportBindStatusRequestData() const;
+
+	/** 组装 airport_organization_get 请求 data（自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildAirportOrganizationGetRequestData() const;
+
+	/** 组装 airport_organization_bind 请求 data（自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildAirportOrganizationBindRequestData() const;
+
+	/** 组装 storage_config_get 请求 data（自动化测试入口） */
+	TSharedPtr<FJsonObject> BuildStorageConfigGetRequestData() const;
+
+	/** 解析并分发 requests_reply；仅 tid / bid / method 完全匹配时消费 pending（自动化测试入口） */
+	bool DispatchRequestsReplyMessage(const FString& InPayloadJson);
+
 	// ---- 事件 ----
 	/** 连接状态变更事件 */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|MqttBridge|Event")
@@ -268,6 +417,10 @@ public:
 	/** 收到 services 指令事件（method） */
 	UPROPERTY(BlueprintAssignable, Category = "UAV|MqttBridge|Event")
 	FUAVServiceCommandReceivedDelegate OnServiceCommandReceived;
+
+	/** 设备主动请求完成事件 */
+	UPROPERTY(BlueprintAssignable, Category = "UAV|MqttBridge|Event")
+	FUAVCloudRequestCompletedDelegate OnCloudRequestCompleted;
 
 protected:
 	virtual void BeginPlay() override;
@@ -289,6 +442,9 @@ protected:
 
 	UFUNCTION()
 	void OnPropertySetMessage(const FMQTTClientMessage& InMessage);
+
+	UFUNCTION()
+	void OnRequestsReplyMessage(const FMQTTClientMessage& InMessage);
 
 	// ---- 指令分发 ----
 	/** 解析 services 报文并按 method 分发到飞控/相机，回发 services_reply（InSn 为报文来源设备 SN，空则回退机场 SN） */
@@ -339,6 +495,19 @@ protected:
 
 	/** 发布 hms 告警事件（thing/product/{DockSn}/events，method=hms） */
 	void PublishHms(const TSharedPtr<FJsonObject>& InHmsData);
+
+	/** 发布设备主动 request，返回 bid（未连接或参数非法时返回空串） */
+	FString PublishRequest(const FString& InMethod, const TSharedPtr<FJsonObject>& InData);
+
+	/** 发布连接后的 config / airport_bind_status 启动请求 */
+	void PublishStartupRequests();
+
+	/** 解析各类 requests_reply data，成功时原子更新对应状态 */
+	bool HandleConfigRequestReply(const TSharedPtr<FJsonObject>& InData);
+	bool HandleAirportBindStatusReply(const TSharedPtr<FJsonObject>& InData);
+	bool HandleAirportOrganizationGetReply(const TSharedPtr<FJsonObject>& InData);
+	bool HandleAirportOrganizationBindReply(const TSharedPtr<FJsonObject>& InData);
+	bool HandleStorageConfigGetReply(const TSharedPtr<FJsonObject>& InData);
 
 	// ---- 事件回调（BeginPlay 时绑定飞控/相机委托） ----
 	UFUNCTION()
@@ -410,6 +579,33 @@ private:
 	/** property/set 订阅对象 */
 	UPROPERTY(Transient)
 	TObjectPtr<UMQTTSubscriptionObject> PropertySetSubscription;
+
+	/** requests_reply 订阅对象 */
+	UPROPERTY(Transient)
+	TObjectPtr<UMQTTSubscriptionObject> RequestsReplySubscription;
+
+	/** 待处理主动请求，按 bid 索引并同时校验 tid / method */
+	TMap<FString, FUAVPendingCloudRequest> PendingRequests;
+
+	/** 最近成功的产品配置 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
+	FUAVProductConfigState ProductConfigState;
+
+	/** 机场组织绑定状态 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
+	FUAVDeviceOrganizationState DockOrganizationState;
+
+	/** 无人机组织绑定状态 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
+	FUAVDeviceOrganizationState DroneOrganizationState;
+
+	/** 最近成功的对象存储配置 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
+	FUAVStorageConfigState StorageConfigState;
+
+	/** 最近成功查询到的组织名称 */
+	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge|Requests", meta = (AllowPrivateAccess = "true"))
+	FString LastOrganizationName;
 
 	/** 已连接 */
 	UPROPERTY(BlueprintReadOnly, Category = "UAV|MqttBridge", meta = (AllowPrivateAccess = "true"))

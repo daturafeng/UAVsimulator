@@ -16,6 +16,8 @@ namespace UAV::CloudApi
 	const TCHAR* kTopicDrcUpTemplate = TEXT("thing/product/{sn}/drc/up");
 	const TCHAR* kTopicPropertySetTemplate = TEXT("thing/product/{sn}/property/set");
 	const TCHAR* kTopicPropertySetReplyTemplate = TEXT("thing/product/{sn}/property/set_reply");
+	const TCHAR* kTopicRequestsTemplate = TEXT("thing/product/{sn}/requests");
+	const TCHAR* kTopicRequestsReplyTemplate = TEXT("thing/product/{sn}/requests_reply");
 
 	// ---- 服务指令 method ----
 	const TCHAR* kMethodFlightAuthorityGrab = TEXT("flight_authority_grab");
@@ -71,6 +73,13 @@ namespace UAV::CloudApi
 	const TCHAR* kMethodFileUploadUpdate = TEXT("fileupload_update");
 	const TCHAR* kMethodFileUploadList = TEXT("fileupload_list");
 	const TCHAR* kMethodMediaPrioritize = TEXT("upload_flighttask_media_prioritize");
+
+	// ---- 设备主动请求 method（对齐 dock RequestsMethodEnum）----
+	const TCHAR* kRequestConfig = TEXT("config");
+	const TCHAR* kRequestAirportBindStatus = TEXT("airport_bind_status");
+	const TCHAR* kRequestAirportOrganizationGet = TEXT("airport_organization_get");
+	const TCHAR* kRequestAirportOrganizationBind = TEXT("airport_organization_bind");
+	const TCHAR* kRequestStorageConfigGet = TEXT("storage_config_get");
 
 	// ---- 远程调试/设备控制 method（对齐 dock DebugMethodEnum）----
 	const TCHAR* kMethodDebugModeOpen = TEXT("debug_mode_open");
@@ -205,6 +214,18 @@ namespace UAV::CloudApi
 			Event->SetObjectField(TEXT("data"), InData);
 		}
 		return Event;
+	}
+
+	TSharedRef<FJsonObject> MakeRequestMessage(const FString& InMethod, const FString& InGateway, const TSharedPtr<FJsonObject>& InData, const FString& InTid, const FString& InBid)
+	{
+		TSharedRef<FJsonObject> Request = MakeShared<FJsonObject>();
+		Request->SetStringField(TEXT("tid"), InTid.IsEmpty() ? NewUuid() : InTid);
+		Request->SetStringField(TEXT("bid"), InBid.IsEmpty() ? NewUuid() : InBid);
+		Request->SetNumberField(TEXT("timestamp"), static_cast<double>(NowTimestampMs()));
+		Request->SetStringField(TEXT("gateway"), InGateway);
+		Request->SetStringField(TEXT("method"), InMethod);
+		Request->SetObjectField(TEXT("data"), InData.IsValid() ? InData : MakeShared<FJsonObject>());
+		return Request;
 	}
 
 	TSharedRef<FJsonObject> MakeTelemetryHeader()

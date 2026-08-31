@@ -156,6 +156,27 @@ namespace
 		return Value.IsValid() ? Value->AsString() : FString();
 	}
 
+	/** 从 JSON 对象安全读取对象字段（缺失或类型不符返回空） */
+	TSharedPtr<FJsonObject> GetDeviceObjectField(const TSharedPtr<FJsonObject>& InObject, const FString& InKey)
+	{
+		const TSharedPtr<FJsonValue> Value = InObject.IsValid() ? InObject->TryGetField(InKey) : nullptr;
+		return Value.IsValid() && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+	}
+
+	/** 从 MqttReply<T> data 中读取成功 output：{result:0, output:{...}} */
+	bool TryGetSuccessfulReplyOutput(const TSharedPtr<FJsonObject>& InData, TSharedPtr<FJsonObject>& OutOutput)
+	{
+		OutOutput.Reset();
+		const TSharedPtr<FJsonValue> ResultValue = InData.IsValid() ? InData->TryGetField(TEXT("result")) : nullptr;
+		if (!ResultValue.IsValid() || ResultValue->Type != EJson::Number
+			|| static_cast<int32>(ResultValue->AsNumber()) != 0)
+		{
+			return false;
+		}
+		OutOutput = GetDeviceObjectField(InData, TEXT("output"));
+		return OutOutput.IsValid();
+	}
+
 	/** 校验固件版本字符串格式：xx.xx.xxxx（对齐 dock OtaCreateDevice product_version 的 @Pattern） */
 	bool IsValidFirmwareVersionFormat(const FString& InVersion)
 	{
@@ -439,6 +460,8 @@ void UUAVMqttBridgeComponent::Disconnect()
 	ServicesSubscription = nullptr;
 	DrcSubscription = nullptr;
 	PropertySetSubscription = nullptr;
+	RequestsReplySubscription = nullptr;
+	PendingRequests.Empty();
 	bConnected = false;
 }
 
@@ -479,6 +502,20 @@ void UUAVMqttBridgeComponent::OnMqttConnect(EMQTTConnectReturnCode ReturnCode)
 			PropertySetSubscription->SetOnMessageHandler(PropertySetDelegate);
 		}
 
+		// 订阅设备主动请求响应 topic（thing/product/{sn}/requests_reply）
+		const FString RequestsReplyTopic = MakeTopic(kTopicRequestsReplyTemplate, DockSn);
+		RequestsReplySubscription = MqttClient->Subscribe(RequestsReplyTopic, EMQTTQualityOfService::Once);
+		if (RequestsReplySubscription)
+		{
+			UMQTTSubscriptionObject::FOnMessageDelegate RequestsReplyDelegate;
+			RequestsReplyDelegate.BindUFunction(this, TEXT("OnRequestsReplyMessage"));
+			RequestsReplySubscription->SetOnMessageHandler(RequestsReplyDelegate);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] requests_reply 订阅失败，跳过启动请求"));
+		}
+
 		// 上报上线状态
 		PublishOnlineStatus(true);
 		PublishDeviceState(DockSn, true);
@@ -491,6 +528,11 @@ void UUAVMqttBridgeComponent::OnMqttConnect(EMQTTConnectReturnCode ReturnCode)
 		PublishPayloadFirmwareVersion();
 		// 上报 HMS 空告警（dock 依赖 hms 记录设备告警）
 		PublishHms(BuildHmsPayload());
+		// requests_reply 订阅成功后启动设备主动配置/绑定状态握手
+		if (RequestsReplySubscription)
+		{
+			PublishStartupRequests();
+		}
 
 		OnConnectionChanged.Broadcast(true);
 	}
@@ -507,6 +549,7 @@ void UUAVMqttBridgeComponent::OnMqttDisconnect()
 	if (bConnected)
 	{
 		bConnected = false;
+		PendingRequests.Empty();
 		UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 连接断开"));
 		PublishOnlineStatus(false);
 		PublishDeviceState(DockSn, false);
@@ -549,6 +592,369 @@ void UUAVMqttBridgeComponent::OnPropertySetMessage(const FMQTTClientMessage& InM
 	// 提取报文来源设备 SN（topic 形如 thing/product/{sn}/property/set）
 	const FString SourceSn = ParseSnFromPropertySetTopic(InMessage.Topic);
 	DispatchPropertySetMessage(PayloadJson, SourceSn);
+}
+
+void UUAVMqttBridgeComponent::OnRequestsReplyMessage(const FMQTTClientMessage& InMessage)
+{
+	const FString& PayloadJson = InMessage.GetPayloadAsString();
+	if (!PayloadJson.IsEmpty())
+	{
+		DispatchRequestsReplyMessage(PayloadJson);
+	}
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildConfigRequestData() const
+{
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("config_type"), TEXT("json"));
+	Data->SetStringField(TEXT("config_scope"), TEXT("product"));
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildAirportBindStatusRequestData() const
+{
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	const TSharedRef<FJsonObject> Dock = MakeShared<FJsonObject>();
+	Dock->SetStringField(TEXT("sn"), DockSn);
+	const TSharedRef<FJsonObject> Drone = MakeShared<FJsonObject>();
+	Drone->SetStringField(TEXT("sn"), DroneSn);
+	Data->SetArrayField(TEXT("devices"), {
+		MakeShared<FJsonValueObject>(Dock),
+		MakeShared<FJsonValueObject>(Drone)
+	});
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildAirportOrganizationGetRequestData() const
+{
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("device_binding_code"), DeviceBindingCode);
+	Data->SetStringField(TEXT("organization_id"), OrganizationId);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildAirportOrganizationBindRequestData() const
+{
+	auto MakeBindDevice = [this](const FString& InSn, const FString& InCallsign, const FString& InModelKey)
+	{
+		const TSharedRef<FJsonObject> Device = MakeShared<FJsonObject>();
+		Device->SetStringField(TEXT("device_binding_code"), DeviceBindingCode);
+		Device->SetStringField(TEXT("organization_id"), OrganizationId);
+		Device->SetStringField(TEXT("device_callsign"), InCallsign);
+		Device->SetStringField(TEXT("sn"), InSn);
+		Device->SetStringField(TEXT("device_model_key"), InModelKey);
+		return Device;
+	};
+
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetArrayField(TEXT("bind_devices"), {
+		MakeShared<FJsonValueObject>(MakeBindDevice(DockSn, DockCallsign, TEXT("3-3-0"))),
+		MakeShared<FJsonValueObject>(MakeBindDevice(DroneSn, DroneCallsign, TEXT("0-100-1")))
+	});
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildStorageConfigGetRequestData() const
+{
+	const TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetNumberField(TEXT("module"), 0);
+	return Data;
+}
+
+TSharedPtr<FJsonObject> UUAVMqttBridgeComponent::BuildTrackedRequestMessage(const FString& InMethod, const TSharedPtr<FJsonObject>& InData, const FString& InTid, const FString& InBid)
+{
+	if (InMethod.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	const FString Tid = InTid.IsEmpty() ? NewUuid() : InTid;
+	const FString Bid = InBid.IsEmpty() ? NewUuid() : InBid;
+	const TSharedRef<FJsonObject> Request = MakeRequestMessage(InMethod, DockSn, InData, Tid, Bid);
+	PendingRequests.Add(Bid, { Tid, InMethod });
+	return Request;
+}
+
+FString UUAVMqttBridgeComponent::PublishRequest(const FString& InMethod, const TSharedPtr<FJsonObject>& InData)
+{
+	if (!MqttClient || !bConnected || InMethod.IsEmpty())
+	{
+		return FString();
+	}
+
+	const TSharedPtr<FJsonObject> Request = BuildTrackedRequestMessage(InMethod, InData);
+	if (!Request.IsValid())
+	{
+		return FString();
+	}
+
+	const FString Bid = Request->GetStringField(TEXT("bid"));
+	const FString Json = SerializeJson(Request.ToSharedRef());
+	if (Json.IsEmpty())
+	{
+		PendingRequests.Remove(Bid);
+		return FString();
+	}
+
+	FMQTTClientMessage Msg;
+	Msg.Topic = MakeTopic(kTopicRequestsTemplate, DockSn);
+	Msg.SetPayloadFromString(Json);
+	MqttClient->Publish(Msg.Topic, Msg.Payload, EMQTTQualityOfService::Once, false);
+	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] 主动请求 %s -> bid=%s"), *InMethod, *Bid);
+	return Bid;
+}
+
+void UUAVMqttBridgeComponent::PublishStartupRequests()
+{
+	PublishRequest(kRequestConfig, BuildConfigRequestData());
+	PublishRequest(kRequestAirportBindStatus, BuildAirportBindStatusRequestData());
+}
+
+FString UUAVMqttBridgeComponent::PublishStorageConfigRequest()
+{
+	return PublishRequest(kRequestStorageConfigGet, BuildStorageConfigGetRequestData());
+}
+
+bool UUAVMqttBridgeComponent::DispatchRequestsReplyMessage(const FString& InPayloadJson)
+{
+	TSharedPtr<FJsonObject> Root;
+	if (InPayloadJson.IsEmpty()
+		|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(InPayloadJson), Root) || !Root.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] requests_reply 报文解析失败"));
+		return false;
+	}
+
+	const FString Tid = GetDeviceStringField(Root, TEXT("tid"));
+	const FString Bid = GetDeviceStringField(Root, TEXT("bid"));
+	const FString Method = GetDeviceStringField(Root, TEXT("method"));
+	const FUAVPendingCloudRequest* Pending = PendingRequests.Find(Bid);
+	if (!Pending || Tid.IsEmpty() || Method.IsEmpty()
+		|| Pending->Tid != Tid || Pending->Method != Method)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UAVMqttBridge] 忽略未关联或错配的 requests_reply method=%s bid=%s"), *Method, *Bid);
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> Data = GetDeviceObjectField(Root, TEXT("data"));
+	PendingRequests.Remove(Bid);
+
+	bool bSuccess = false;
+	if (Data.IsValid())
+	{
+		if (Method == kRequestConfig)
+		{
+			bSuccess = HandleConfigRequestReply(Data);
+		}
+		else if (Method == kRequestAirportBindStatus)
+		{
+			bSuccess = HandleAirportBindStatusReply(Data);
+		}
+		else if (Method == kRequestAirportOrganizationGet)
+		{
+			bSuccess = HandleAirportOrganizationGetReply(Data);
+		}
+		else if (Method == kRequestAirportOrganizationBind)
+		{
+			bSuccess = HandleAirportOrganizationBindReply(Data);
+		}
+		else if (Method == kRequestStorageConfigGet)
+		{
+			bSuccess = HandleStorageConfigGetReply(Data);
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[UAVMqttBridge] requests_reply %s -> %s"), *Method, bSuccess ? TEXT("成功") : TEXT("失败"));
+	OnCloudRequestCompleted.Broadcast(Method, bSuccess, Bid);
+	return bSuccess;
+}
+
+bool UUAVMqttBridgeComponent::HandleConfigRequestReply(const TSharedPtr<FJsonObject>& InData)
+{
+	FUAVProductConfigState NewState;
+	NewState.NtpServerHost = GetDeviceStringField(InData, TEXT("ntp_server_host"));
+	NewState.AppId = GetDeviceStringField(InData, TEXT("app_id"));
+	NewState.AppKey = GetDeviceStringField(InData, TEXT("app_key"));
+	NewState.AppLicense = GetDeviceStringField(InData, TEXT("app_license"));
+	if (NewState.NtpServerHost.IsEmpty() || NewState.AppId.IsEmpty()
+		|| NewState.AppKey.IsEmpty() || NewState.AppLicense.IsEmpty())
+	{
+		return false;
+	}
+
+	NewState.bValid = true;
+	ProductConfigState = MoveTemp(NewState);
+	return true;
+}
+
+bool UUAVMqttBridgeComponent::HandleAirportBindStatusReply(const TSharedPtr<FJsonObject>& InData)
+{
+	TSharedPtr<FJsonObject> Output;
+	if (!TryGetSuccessfulReplyOutput(InData, Output))
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* BindStatus = nullptr;
+	if (!Output->TryGetArrayField(TEXT("bind_status"), BindStatus))
+	{
+		return false;
+	}
+
+	FUAVDeviceOrganizationState NewDockState;
+	FUAVDeviceOrganizationState NewDroneState;
+	bool bHasDock = false;
+	bool bHasDrone = false;
+	for (const TSharedPtr<FJsonValue>& Value : *BindStatus)
+	{
+		if (!Value.IsValid() || Value->Type != EJson::Object)
+		{
+			return false;
+		}
+		const TSharedPtr<FJsonObject> Item = Value->AsObject();
+		const FString Sn = GetDeviceStringField(Item, TEXT("sn"));
+		bool bBound = false;
+		if (!Item.IsValid() || !Item->TryGetBoolField(TEXT("is_device_bind_organization"), bBound))
+		{
+			return false;
+		}
+
+		FUAVDeviceOrganizationState State;
+		State.bHasResponse = true;
+		State.bBound = bBound;
+		State.OrganizationId = GetDeviceStringField(Item, TEXT("organization_id"));
+		State.OrganizationName = GetDeviceStringField(Item, TEXT("organization_name"));
+		State.DeviceCallsign = GetDeviceStringField(Item, TEXT("device_callsign"));
+		if (Sn == DockSn)
+		{
+			NewDockState = MoveTemp(State);
+			bHasDock = true;
+		}
+		else if (Sn == DroneSn)
+		{
+			NewDroneState = MoveTemp(State);
+			bHasDrone = true;
+		}
+	}
+
+	if (!bHasDock || !bHasDrone)
+	{
+		return false;
+	}
+
+	DockOrganizationState = MoveTemp(NewDockState);
+	DroneOrganizationState = MoveTemp(NewDroneState);
+	if ((!DockOrganizationState.bBound || !DroneOrganizationState.bBound) && !DeviceBindingCode.IsEmpty())
+	{
+		PublishRequest(kRequestAirportOrganizationGet, BuildAirportOrganizationGetRequestData());
+	}
+	return true;
+}
+
+bool UUAVMqttBridgeComponent::HandleAirportOrganizationGetReply(const TSharedPtr<FJsonObject>& InData)
+{
+	TSharedPtr<FJsonObject> Output;
+	if (!TryGetSuccessfulReplyOutput(InData, Output))
+	{
+		return false;
+	}
+
+	const FString OrganizationName = GetDeviceStringField(Output, TEXT("organization_name"));
+	if (OrganizationName.IsEmpty())
+	{
+		return false;
+	}
+
+	LastOrganizationName = OrganizationName;
+	if (!DeviceBindingCode.IsEmpty())
+	{
+		PublishRequest(kRequestAirportOrganizationBind, BuildAirportOrganizationBindRequestData());
+	}
+	return true;
+}
+
+bool UUAVMqttBridgeComponent::HandleAirportOrganizationBindReply(const TSharedPtr<FJsonObject>& InData)
+{
+	TSharedPtr<FJsonObject> Output;
+	if (!TryGetSuccessfulReplyOutput(InData, Output))
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* ErrorInfos = nullptr;
+	if (!Output->TryGetArrayField(TEXT("err_infos"), ErrorInfos))
+	{
+		return false;
+	}
+
+	bool bDockSuccess = false;
+	bool bDroneSuccess = false;
+	for (const TSharedPtr<FJsonValue>& Value : *ErrorInfos)
+	{
+		if (!Value.IsValid() || Value->Type != EJson::Object)
+		{
+			return false;
+		}
+		const TSharedPtr<FJsonObject> Item = Value->AsObject();
+		const FString Sn = GetDeviceStringField(Item, TEXT("sn"));
+		const TSharedPtr<FJsonValue> ErrorCode = Item.IsValid() ? Item->TryGetField(TEXT("err_code")) : nullptr;
+		if (!ErrorCode.IsValid() || ErrorCode->Type != EJson::Number)
+		{
+			return false;
+		}
+		const bool bItemSuccess = static_cast<int32>(ErrorCode->AsNumber()) == 0;
+		if (Sn == DockSn)
+		{
+			bDockSuccess = bItemSuccess;
+		}
+		else if (Sn == DroneSn)
+		{
+			bDroneSuccess = bItemSuccess;
+		}
+	}
+
+	if (!bDockSuccess || !bDroneSuccess)
+	{
+		return false;
+	}
+
+	DockOrganizationState.bHasResponse = true;
+	DockOrganizationState.bBound = true;
+	DroneOrganizationState.bHasResponse = true;
+	DroneOrganizationState.bBound = true;
+	return true;
+}
+
+bool UUAVMqttBridgeComponent::HandleStorageConfigGetReply(const TSharedPtr<FJsonObject>& InData)
+{
+	TSharedPtr<FJsonObject> Output;
+	if (!TryGetSuccessfulReplyOutput(InData, Output))
+	{
+		return false;
+	}
+
+	FUAVStorageConfigState NewState;
+	NewState.Bucket = GetDeviceStringField(Output, TEXT("bucket"));
+	NewState.Endpoint = GetDeviceStringField(Output, TEXT("endpoint"));
+	NewState.ObjectKeyPrefix = GetDeviceStringField(Output, TEXT("object_key_prefix"));
+	NewState.Provider = GetDeviceStringField(Output, TEXT("provider"));
+	NewState.Region = GetDeviceStringField(Output, TEXT("region"));
+	const TSharedPtr<FJsonObject> Credentials = GetDeviceObjectField(Output, TEXT("credentials"));
+	if (NewState.Bucket.IsEmpty() || NewState.Endpoint.IsEmpty() || NewState.ObjectKeyPrefix.IsEmpty()
+		|| NewState.Provider.IsEmpty() || NewState.Region.IsEmpty()
+		|| !Credentials.IsValid() || Credentials->Values.Num() == 0)
+	{
+		return false;
+	}
+
+	NewState.CredentialsJson = SerializeJson(Credentials.ToSharedRef());
+	if (NewState.CredentialsJson.IsEmpty())
+	{
+		return false;
+	}
+	NewState.bValid = true;
+	StorageConfigState = MoveTemp(NewState);
+	return true;
 }
 
 void UUAVMqttBridgeComponent::DispatchServicesMessage(const FString& InPayloadJson, const FString& InSn)
